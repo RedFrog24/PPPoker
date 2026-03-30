@@ -4,8 +4,8 @@ MacroQuest **Lua** automation for the EverQuest **Paintings Playing Poker** (23r
 
 ## Contents
 
-- **`init.lua`** — main PPPoker script (ImGui, travel, objectives).
-- **`init2.lua`** — prototype / v2 runner (`PPPokerGUIV2`).
+- **`init.lua`** — main PPPoker runner (ImGui, objectives, travel).
+- **`init_pppoker_v1_27.lua`** — backup of legacy v1.27 pipeline script; not loaded by default.
 - **`Poker2.lua`**, **`Poker.lua`**, etc. — related helpers / timing.
 - **`mq_task_diag.lua`** — optional diagnostics.
 
@@ -17,7 +17,7 @@ Quest reference: [Allakhazam — Paintings Playing Poker](https://everquest.alla
 
 ## Run
 
-Use your usual MQ Lua load path (e.g. `/lua run ...` per your MacroQuest setup). Entry points depend on which `init` you bind.
+Use your usual MQ Lua load path (e.g. `/lua run .../pppoker/init` per your MacroQuest setup). Primary entry: **`init.lua`**.
 
 ## Publish to GitHub (first time)
 
