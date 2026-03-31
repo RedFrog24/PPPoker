@@ -2,9 +2,20 @@
 -- Created by: RedFrog
 -- Original creation date: 03/18/2026
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
--- Version: 2.66
+-- Version: 2.82
 -- Changelog:
--- 2.66: Entry file rename — former init2.lua is now init.lua (simple `/lua run .../init`); Run popup no longer tags "init2".
+-- 2.82: Version re-alignment — working copy had been ~2.65 when renamed init2→init (2.66); restored 2.67–2.81 behavior in one pass (see below). Git had never contained those intermediate versions.
+-- 2.81: Task journal — PP.TASK_JOURNAL_SYNC_MODE `open_once_no_fetch` (default): open TaskWnd once per Run, no periodic fetch/open-close spam; PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS for Tassel.
+-- 2.80: Highpass tiger — PP.LOC.TIGER trial coords (wall-stuck / Gate); may revert.
+-- 2.79: Quest Run Time — `formatQuestRunDuration` (e.g. "2 min 30 seconds").
+-- 2.78: ensureInvisIfNeeded `invis - <label>` — debug panel only (debugLogQuiet).
+-- 2.77: CWTN already paused — debugLogQuiet.
+-- 2.76: Travel prep chatter (prepCityTravel, preflight header, ensureSpeed*, Moors/Nek) — debugLogQuiet.
+-- 2.75: ensureZone "Already in … skipping /travelto" — debugLogQuiet.
+-- 2.74: PoK→Neriak retry line — "Traveling to" + mqItem("Neriak Foreign Quarter") + attempt.
+-- 2.73: Atlas load — debugLogQuiet only; no "(WxH)" in message.
+-- 2.72: ensureZone travel — mqItem destination; drop "via /travelto …".
+-- 2.66: Entry file rename — former init2.lua is now init.lua; Run popup no longer tags "init2".
 -- 2.65: Debug — bordered scrollable frame + colored log lines restored (2.62-style ImGui.TextColored parsing of \\a codes). Ring buffer in gui.debugLog; info/warn mirror to panel without duplicate console line; standalone debugLog() still prints + appends.
 -- 2.63: Debug — no in-window log/frame; Debug toggle removed. debugLog() and all script diagnostics go to EQ console only (info/warn unchanged).
 -- 2.62: Debug panel — parse MQ \a color codes and draw with ImGui.TextColored (frames do not enable EQ colors; needs explicit mapping). Raw log lines from info/warn; optional bordered debug child. mqSpell/mqObjGreen use "\\a" in Lua so stored strings match console triplets.
@@ -82,7 +93,7 @@ local ImAnim = require('ImAnim')
 local stopRequested = false
 
 local PP = {
-    VERSION = "2.66",
+    VERSION = "2.82",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -236,9 +247,13 @@ local PP = {
     --- Extra dwell after moving() to Slick on quest-acquire path (init.lua Poker2 buffer before range check).
     SLICK_ACQUIRE_POST_NAV_BUFFER_MS = 3000,
     WAIT_OBJECTIVE_TIMEOUT_MS = 120000,
+    --- Objective 1 (Tassel) — longer wait before timeout (journal lag).
+    WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS = 180000,
     WAIT_OBJECTIVE_TIMEOUT_FINAL_MS = 300000,
-    --- 0 = off. While waiting for objective update, re-sync TaskWnd this often (helps journal lag after hail).
+    --- 0 = off. While waiting for objective update, re-sync TaskWnd this often (helps journal lag after hail). Ignored when TASK_JOURNAL_SYNC_MODE is open_once_no_fetch.
     WAIT_JOURNAL_SYNC_MS = 15000,
+    --- "open_once_no_fetch" (default): open TaskWnd once per Run; no fetch/close loop. "legacy_full": open+fetch+close each sync.
+    TASK_JOURNAL_SYNC_MODE = "open_once_no_fetch",
     --- First journal refresh on Run: "minimal" = /windowstate TaskWnd fetch only (no open/close); "full" = open+fetch+close. Use full if getTask stays empty with minimal.
     TASK_JOURNAL_FIRST_SYNC = "minimal",
     --- If no Paintings task in journal, go to Slick at PP.LOC.SLICK, /say keyword, then full sync and re-check.
@@ -283,7 +298,8 @@ local PP = {
         LUMBER_1 = { -442, -215, -12 },
         LUMBER_2 = { -426, -263, -12 },
         LUMBER_3 = { -408, -267, -12 },
-        TIGER = { -125, 540, -13 },
+        --- Tiger painting (obj 12): trial — slightly before {-125,540,-13}; may revert (wall / Gate).
+        TIGER = { -126.64, 573.41, -13.98 },
         NQ = { 118, 335, 1 },
         SQ_FISH = { -282, -230, 2 },
         SQ_LION = { 311, -173, 4 },
@@ -502,7 +518,7 @@ local function loadTextures()
                 PP.loadedOk[i] = true
             end
             any = true
-            debugLog("Loaded atlas " .. PP.ATLAS_FILE .. " (" .. PP.ATLAS_W .. "x" .. PP.ATLAS_H .. ")")
+            debugLogQuiet("Loaded atlas " .. PP.ATLAS_FILE)
         else
             for i = 1, #PP.PANELS do
                 PP.textures[i] = nil
@@ -966,20 +982,30 @@ debugLog = function(msg)
     pushDebugLine(msg, true)
 end
 
+--- Append to Debug panel only (no EQ console print).
+debugLogQuiet = function(msg)
+    pushDebugLine(msg, false)
+end
+
 -- Message body often started with "PPPoker:"; print already prefixes [\agPPPoker\ao].
 local function stripPppokerPrefix(msg)
     local s = tostring(msg or "")
     return (s:gsub("^PPPoker:%s*", ""))
 end
 
---- Wrap spell name for console (purple/magenta); reset after. Use "\\a" so strings contain \a + letter (MQ triplet).
+--- Spell names: \\ap (purple). Reset with \\ax.
 local function mqSpell(name)
-    return "\\am" .. tostring(name or "") .. "\\at"
+    return "\ap" .. tostring(name or "") .. "\ax"
 end
 
 --- Objective completion / "all done" lines (green).
 local function mqObjGreen(msg)
-    return "\\ag" .. tostring(msg or "") .. "\\at"
+    return "\ag" .. tostring(msg or "") .. "\ax"
+end
+
+--- Item / destination highlight: \\am (magenta). Reset with \\ax.
+local function mqItem(name)
+    return "\am" .. tostring(name or "") .. "\ax"
 end
 
 local function info(msg)
@@ -1803,7 +1829,7 @@ local function ensureInvisIfNeeded(label)
         info(string.format("invis already up (%s) - skip recast (%s).", mqSpell(tostring(invWhich or "?")), tostring(label)))
         return true
     end
-    info("invis - " .. tostring(label))
+    debugLogQuiet("invis - " .. tostring(label))
     pppokerEnsureInvisBuff()
     waitUntilMs(8000, function()
         return not mq.TLO.Me.Casting()
@@ -1853,10 +1879,10 @@ end
 local function prepCityTravel(whereLabel)
     if not PP.TRAVEL_CITY_PREP_BEFORE_ZONE then return end
     whereLabel = whereLabel or "city zone"
-    info("prep for " .. whereLabel .. " - movement speed only (invis at leg-specific points).")
+    debugLogQuiet("prep for " .. whereLabel .. " - movement speed only (invis at leg-specific points).")
     local movOk, movDetail = pppokerEnsureMovementBuff()
     if movOk then
-        info("movement OK (" .. tostring(movDetail or "?") .. ").")
+        debugLogQuiet("movement OK (" .. tostring(movDetail or "?") .. ").")
     else
         warn("movement buff missing - use SoW/Selo/totem manually.")
     end
@@ -1959,13 +1985,13 @@ end
 
 local function ensureZone(zoneId, travelToArg, label, timeoutMs)
     if mq.TLO.Zone.ID() == zoneId then
-        info(string.format("Already in %s (%d), skipping /travelto.", tostring(label), zoneId))
+        debugLogQuiet(string.format("Already in %s (%d), skipping /travelto.", tostring(label), zoneId))
         return
     end
     if PP.TRAVEL_CITY_PREP_BEFORE_ZONE and zoneWantsCityPrep(zoneId) then
         prepCityTravel(tostring(label))
     end
-    info(string.format("Traveling to %s via /travelto %s", tostring(label), tostring(travelToArg)))
+    info("Traveling to " .. mqItem(tostring(label)) .. ".")
     mq.cmdf('/squelch /travelto %s', travelToArg)
     zoning(zoneId, timeoutMs or 240000)
 end
@@ -2392,7 +2418,7 @@ end
 
 --- After Run passes journal checks: speed, mount, Zueria snapshot, Guise shrink (once per Run). No invis here — apply invis in prepBeforeTasselLeg / zone helpers.
 local function runPreflightAfterQuestChecks()
-    info("preflight - speed, mount, Zueria Slide check, Guise shrink (no invis; invis last per leg).")
+    debugLogQuiet("preflight - speed, mount, Zueria Slide check, Guise shrink (no invis; invis last per leg).")
     pppokerEnsureMovementBuff()
     mountIfNeeded()
     if PP.pppokerZueria and PP.pppokerZueria.refreshReadiness then
@@ -2411,7 +2437,7 @@ local function ensureSpeedAndInvisInNeriak(contextLabel)
         return
     end
     contextLabel = contextLabel or "Neriak"
-    info(string.format("%s - speed + invis on foot (Neriak zone %d).", contextLabel, z))
+    debugLogQuiet(string.format("%s - speed + invis on foot (Neriak zone %d).", contextLabel, z))
     dismountIfMounted("Neriak buffs (no mount)")
     mq.delay(400)
     pppokerEnsureMovementBuff()
@@ -2427,7 +2453,7 @@ local function ensureSpeedAndInvisInQeynos(contextLabel)
         return
     end
     contextLabel = contextLabel or "Qeynos"
-    info(string.format("%s - speed, shrink, dismount if needed, invis (Qeynos zone %d).", contextLabel, z))
+    debugLogQuiet(string.format("%s - speed, shrink, dismount if needed, invis (Qeynos zone %d).", contextLabel, z))
     mq.delay(400)
     waitMeNotCasting(30000)
     pppokerEnsureMovementBuff()
@@ -2452,7 +2478,7 @@ local function ensureSpeedShrinkInvisInHighpass(contextLabel)
         return
     end
     contextLabel = contextLabel or "Highpass"
-    info(string.format("%s - speed, shrink, mount, invis (Highpass zone %d).", contextLabel, z))
+    debugLogQuiet(string.format("%s - speed, shrink, mount, invis (Highpass zone %d).", contextLabel, z))
     mq.delay(400)
     waitMeNotCasting(30000)
     pppokerEnsureMovementBuff()
@@ -2478,7 +2504,7 @@ local function travelNeriakForeignFromPokHub()
     end
     local zoned = false
     for attempt = 1, 3 do
-        info(string.format("/travelto neriaka from PoK (attempt %d/3).", attempt))
+        info("Traveling to " .. mqItem("Neriak Foreign Quarter") .. string.format(" (attempt %d/3).", attempt))
         mq.cmd("/squelch /travelto neriaka")
         if waitForZoneOrFalse(PP.ZONE.NERIAK_A, 180000) then
             zoned = true
@@ -2651,7 +2677,7 @@ local function pauseCWTNPlugins()
 
     local pausedNow = cwtnAppearsPaused()
     if pausedNow == true then
-        debugLog(string.format("CWTN already paused — skipping /CWTN pause on (%s)", tostring(pluginName)))
+        debugLogQuiet(string.format("CWTN already paused — skipping /CWTN pause on (%s)", tostring(pluginName)))
         PP.cwtnState.pausedApplied = false
         PP.cwtnState.alreadyPausedAtStart = true
         return true
@@ -2731,8 +2757,31 @@ end
 -- Quest progress: mq.TLO.Task. Journal prime uses mq.delay — ONLY call from script main thread (while gui.open), never from ImGui draw.
 -- Completion signal: objectiveIsComplete (Done() then Status()). Indices: /lua parse mq.TLO.Task("Paintings Playing Poker").Objective(N).Status()
 
+local taskJournalSyncState = {
+    openedOnce = false,
+}
+
+local function journalSyncMode()
+    local m = tostring(PP.TASK_JOURNAL_SYNC_MODE or "legacy_full"):lower()
+    if m == "open_once_no_fetch" then
+        return "open_once_no_fetch"
+    end
+    return "legacy_full"
+end
+
 --- Every Run: full sync so resume sees current journal (repeatable).
 local function syncTaskJournalWindowFull()
+    if journalSyncMode() == "open_once_no_fetch" then
+        if not taskJournalSyncState.openedOnce then
+            pcall(function()
+                mq.cmd("/windowstate TaskWnd open")
+            end)
+            mq.delay(200)
+            taskJournalSyncState.openedOnce = true
+            debugLogQuiet("TaskWnd: open_once_no_fetch — opened once; no fetch/close loop.")
+        end
+        return
+    end
     pcall(function()
         mq.cmd("/windowstate TaskWnd open")
     end)
@@ -2749,6 +2798,12 @@ end
 
 --- Update Task TLO without flashing the journal window (many Live builds). If getTask() still empty, set PP.TASK_JOURNAL_FIRST_SYNC = "full".
 local function syncTaskJournalMinimal()
+    if journalSyncMode() == "open_once_no_fetch" then
+        if not taskJournalSyncState.openedOnce then
+            syncTaskJournalWindowFull()
+        end
+        return
+    end
     pcall(function()
         mq.cmd("/windowstate TaskWnd fetch")
     end)
@@ -2972,7 +3027,9 @@ local function waitObjectiveDone(taskName, idx, timeoutMs)
     local nextSync = t0
     while mq.gettime() - t0 < timeoutMs do
         shouldStop()
-        if PP.WAIT_JOURNAL_SYNC_MS and PP.WAIT_JOURNAL_SYNC_MS > 0 and mq.gettime() >= nextSync then
+        if journalSyncMode() ~= "open_once_no_fetch"
+            and PP.WAIT_JOURNAL_SYNC_MS and PP.WAIT_JOURNAL_SYNC_MS > 0
+            and mq.gettime() >= nextSync then
             syncTaskJournalWindowFull()
             nextSync = mq.gettime() + PP.WAIT_JOURNAL_SYNC_MS
         end
@@ -3068,7 +3125,7 @@ local function poker2MountDelayInNekOrMoors()
     end
     local z = mq.TLO.Zone.ID()
     if z == PP.ZONE.MOORS then
-        info("Blightfire (Moors) - speed buff, mount if needed.")
+        debugLogQuiet("Blightfire (Moors) - speed buff, mount if needed.")
         mq.delay(400)
         waitMeNotCasting(30000)
         pppokerEnsureMovementBuff()
@@ -3080,7 +3137,7 @@ local function poker2MountDelayInNekOrMoors()
     if z ~= PP.ZONE.NEKTULOS then
         return
     end
-    info(string.format("Poker2 mount pause (Nektulos zone %d) before next travel.", z))
+    debugLogQuiet(string.format("Poker2 mount pause (Nektulos zone %d) before next travel.", z))
     mq.delay(1000)
     mountIfNeeded()
     waitMeNotCasting(15000)
@@ -3304,9 +3361,21 @@ local function tryAcquireQuestFromBigSlick()
     syncJournalAfterKeywordTry()
 end
 
+--- End-of-run log: e.g. "2 min 30 seconds", "45 seconds", "1 min 0 seconds".
+local function formatQuestRunDuration(totalSec)
+    local sec = math.max(0, math.floor(tonumber(totalSec) or 0))
+    local m = math.floor(sec / 60)
+    local s = sec % 60
+    if m == 0 then
+        return string.format("%d %s", s, s == 1 and "second" or "seconds")
+    end
+    return string.format("%d min %d %s", m, s, s == 1 and "second" or "seconds")
+end
+
 --- Main automation: first incomplete objective → runObjectiveStep → waitObjectiveDone (objectiveIsComplete). Same data as getQuestProgress / GUI bar.
 local function runQuest()
     resetGuiseShrinkSession()
+    taskJournalSyncState.openedOnce = false
     local questRunStartTime = os.time()
     mq.cmd(string.format('/popup Starting: Paintings Playing Poker v%s', PP.VERSION))
     pauseCWTNPlugins()
@@ -3402,8 +3471,14 @@ local function runQuest()
         local instr = objInstruction(task, idx)
         info(string.format("Resume: first incomplete objective %d: %s", idx, instr))
         runObjectiveStep(idx, task)
-        local waitMs = (idx == 16) and (PP.WAIT_OBJECTIVE_TIMEOUT_FINAL_MS or 300000)
-            or (PP.WAIT_OBJECTIVE_TIMEOUT_MS or 120000)
+        local waitMs
+        if idx == PP.QUEST_OBJECTIVE_COUNT then
+            waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_FINAL_MS or 300000
+        elseif idx == 1 and (PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS or 0) > 0 then
+            waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS
+        else
+            waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_MS or 120000
+        end
         if not waitObjectiveDone(PP.QUEST_TITLE, idx, waitMs) then
             fail(string.format("Timeout waiting objective %d to complete: %s", idx, instr))
         end
@@ -3419,8 +3494,8 @@ local function runQuest()
 
     do
         local n = getCommemorativeCount()
-        info(string.format("You now have... %d Commemorative Coins !", n))
-        info(string.format("Quest Run Time... %d Seconds", os.time() - questRunStartTime))
+        info(string.format("\ayYou now have... \ag%d\ay Commemorative Coins \ax!", n))
+        info(string.format("\aoQuest Run Time... \ay%s\ax", formatQuestRunDuration(os.time() - questRunStartTime)))
     end
 
     unpauseRGMercs()
