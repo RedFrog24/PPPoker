@@ -2,8 +2,29 @@
 -- Created by: RedFrog
 -- Original creation date: 03/18/2026
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
--- Version: 2.82
+-- Version: 3.03
 -- Changelog:
+-- 3.03: Invis — removed bogus **Veil of Midnight** (not an EQ spell); BRD songs **Shauri's Sonorous Clouding**, **Selo's Song of Travel** (verify ranks in spellbook). ENC/MAG/WIZ: **Superior Invisibility** where listed. `INVIS_REFRESH_MIN_TICKS_REMAINING` + `INVIS_DURATION_TRACK_EXTRA_NAMES` — refresh before fade (MQ `Me.Buff(name).Duration.Ticks`). Changelog 2.83 note: Veil of Midnight was never valid.
+-- 3.02: Default `INVIS_ITEM_NAMES` — **Cloudy Potion** last (add other clickies above it for earlier tries).
+-- 3.01: Gate **item ladder** — `GATE_ITEM_LADDER` ordered steps (`stein` → `zueria_slide` → `potions`); **skip** stein/philter when on reuse timer (no long wait blocking Slide). Invis **item** ladder: `INVIS_ITEM_LADDER` or `INVIS_ITEM_NAMES` order; skip clicky if not `FindItem` / reuse-ready (`INVIS_SKIP_ITEM_IF_NOT_READY`). Shared `itemClickReuseReady()` for timer checks.
+-- 3.00: Rogue Sneak/Hide — skip `/doability` when `Me.Sneaking` / `Me.Hidden` already true; optional `Me.AbilityReady("Sneak"|"Hide")` guard (matches `${Me.Sneaking}`, `${Me.Hidden}`, `${Me.AbilityReady[x]}` in macros).
+-- 2.99: Gate **item** order: **Drunkard's Stein** (PoK clicky, timer like philters) → **Zueria Slide** (level/mode checks unchanged) → **GATE_POTION_NAMES**; after Slide to Nektulos, AA/spell/stein/philter then `/travelto` PoK (no nested Slide). Obj 16 Lion routing delay **2000→1000** ms; final Slick hail timings **POST_HAIL 4500→3500**, **PRE_HAIL / POST_NAV 1200→600** ms.
+-- 2.98: Highpass — tunable `HIGHPASS_ENTRY_DELAY_MS` / `HIGHPASS_POST_HAIL_DELAY_MS` (slightly shorter defaults); Tiger `LOC.TIGER` + face east (`TIGER_FACE_HEADING` 128), re-nav if still beyond `TIGER_NAV_RETRY_IF_DIST_GT`. See `WAIT_OBJECTIVE_TIMEOUT_MS` — wait loop after obj 12 until journal credits Tiger Roar.
+-- 2.97: Obj 13 (after Tiger Roar → North Qeynos) — use same **Gate AA → spell → Zueria Slide → potion → run** ladder as obj 8/16; was still calling `tryGateDirectOrPokFallback` (monolithic Gate) so Slide never ran. `PP.TRAVEL_TIGER_ZUERIA_SLIDE_TO_NEK`.
+-- 2.96: Bard invis AA — verified **Alt Act ID 231** = Shauri's Sonorous Clouding on EQ Resource master alt-act list (`articles.eqresource.com/altactlist.php`, Bard table; page spells it "Sonorious"). Name + rank effects cross-checked vs ZAM (`everquest.allakhazam.com/db/spell.html?spell=51343` Shauri's Sonorous Clouding III). `PP.INVIS_BRD_AA_IDS` / `PP.INVIS_BRD_AA_NAMES` populated from those sources (not guessed).
+-- 2.95: Removed mistaken default `"Veil of Notes"` (not a verified Live AA string). Bard invis: set `PP.INVIS_BRD_AA_NAMES` and/or `PP.INVIS_SELF_AA_IDS` from your character.
+-- 2.94: Bard invis — `INVIS_BRD_AA_NAMES` tried before caster-style `AltAbility` names; invis songs use `SongReady` not `SpellReady`. Explains caster vs BRD AA name resolution difference.
+-- 2.93: AA activation now supports ID-first lists (movement/invis) with name fallback; upkeep uses /alt act by id path where configured. Added levitation cleanup list (`REMOVE_LEVITATION_BUFFS`) and `/removebuff` pass (default: "Shauri's Levitation") after invis/upkeep.
+-- 2.92: Buff streamlining — movement/invis now support AA-first ladders with faster fall-through and optional continuous upkeep tick (low-delay checks during Run). Added configurable movement/invis AA + item lists and reduced cast retry stall.
+-- 2.91: Travel refactor — linear “capability ladder” routing: **Gate AA → Gate spell → Zueria Slide item → Gate potions (list) → Run (zone-to-zone chain)**. Obj 8 (Toadstool) and obj 16 (Lion) now follow this order to reduce unnecessary waits and fix direct-zone edge cases.
+-- 2.90: Toadstool→obj 8 — **runners** (no Gate AA/spell): nav to `PP.LOC.TOADSTOOL_RUNNER_PRE_NERIAKA` (default 3.53, -464.07, -10.81 in Commons), then `/travelto neriaka` before Gate/moors; `PP.TRAVEL_TOADSTOOL_RUNNER_PRE_NERIAKA_NAV`.
+-- 2.89: Toadstool→obj 8 — optional **Zueria Slide** to Nektulos (fast), then Moors→Highpass; **no Gate AA/spell** → `/travelto moors` before PoK hub fallback. Lion's Mane→obj 16 — optional **Slide→Nek** then PoK→West FP for non-gaters. `PP.TRAVEL_TOADSTOOL_ZUERIA_SLIDE_TO_NEK`, `PP.TRAVEL_LION_ZUERIA_SLIDE_TO_NEK`, `PP.TRAVEL_TOADSTOOL_NO_GATE_USE_MOORS_FIRST`. EasyFind to Foreign Quarter **default off** (`TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA`); navmesh issues were client-side — re-enable if needed. `pppokerZueria.attemptSlideToNektulos()` shared with Betty grog path.
+-- 2.88: Toadstool→obj 8 — from **Neriak Commons**, optional `/easyfind neriaka` (MQ2EasyFind) to zone line **Neriak Foreign Quarter** before Gate/`/travelto` (avoids broken EQ zone-path for some clients). `PP.TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA` / `PP.EASYFIND_NERIAKA_SHORTNAME`. Gate potions: `GATE_POTION_NAMES` list — added **Vial of Swirling Smoke** (PoK vendor; Lore); legacy `GATE_POTION_NAME` still honored if `GATE_POTION_NAMES` omitted.
+-- 2.87: Gate-fail routing — try **direct** `/travelto` to the next leg first (restores 2.85 speed: Neriak→Highpass, Highpass→NQ, Qeynos→West FP); **PoK hub fallback** only if direct travel does not zone in time (keeps 2.86 fix for characters that need the hub).
+-- 2.86: Obj 8 / 13 / 16 (and East FP→Neriak hub) — if Gate AA/spell/potion unavailable, `/travelto poknowledge` to PoK before next `/travelto` (matches prior analysis; fixes Neriak→Highpass with no gate means).
+-- 2.85: NEC invis — add **Skin of the Shadow** (self, Improved Invis; ~Lv 55) before **Gather Shadows**; script skips unknown spells via Spell.ID.
+-- 2.84: NEC invis spells — only **Gather Shadows** (Lv 7 self, Invisibility Unstable) per class lists; removed Gather Umbra (item/group click, not spellbook), Shadow, Invisibility (wrong / not NEC for living invis). ITU lines (e.g. Invisibility Versus Undead) intentionally omitted.
+-- 2.83: CWTN — NEC expects MQ2Necro (fallback MQ2Necromancer); BRD still MQ2Bard. Invis — BRD songs (Shauri's Sonorous Clouding, Veil of Midnight); NEC spell list + optional PP.SPELLGEM_MEM_CAP.
 -- 2.82: Version re-alignment — working copy had been ~2.65 when renamed init2→init (2.66); restored 2.67–2.81 behavior in one pass (see below). Git had never contained those intermediate versions.
 -- 2.81: Task journal — PP.TASK_JOURNAL_SYNC_MODE `open_once_no_fetch` (default): open TaskWnd once per Run, no periodic fetch/open-close spam; PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS for Tassel.
 -- 2.80: Highpass tiger — PP.LOC.TIGER trial coords (wall-stuck / Gate); may revert.
@@ -93,7 +114,7 @@ local ImAnim = require('ImAnim')
 local stopRequested = false
 
 local PP = {
-    VERSION = "2.82",
+    VERSION = "3.03",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -142,7 +163,19 @@ local PP = {
 
     GATE_ZONE_ID = 202,
     GATE_ALT_ACT_ID = 1217,
-    GATE_POTION_NAME = "Philter of Major Translocation",
+    --- Straight-to-PoK clicky (Plane of Knowledge gate); ~30 min reuse; not level-gated. Used when `GATE_ITEM_LADDER` contains `"stein"`. Set nil/"" to skip stein step.
+    GATE_STEIN_NAME = "Drunkard's Stein",
+    --- Ordered steps after Gate AA/spell: each step skipped if unusable (missing, **reuse timer**, level/mode for Slide). Reorder or omit keys to change priority. `"potions"` = `GATE_POTION_NAMES` in list order.
+    GATE_ITEM_LADDER = { "stein", "zueria_slide", "potions" },
+    --- Full `tryGateToPoK` item phase: allow Zueria Slide when ladder includes `zueria_slide` and mode permits (tiger/lion/gate_full). Set false to never Slide in monolithic Gate (stein + philters only).
+    GATE_ITEM_PHASE_ZUERIA_SLIDE = true,
+    --- Gate clickies (any match enables potion path). First **ready** item is used in order. Lore — carry one. Vial: PoK Mirao Frostpuch ~1049pp; Philter: higher-level option.
+    GATE_POTION_NAMES = {
+        "Philter of Major Translocation",
+        "Vial of Swirling Smoke",
+    },
+    --- Deprecated: use GATE_POTION_NAMES. If set and GATE_POTION_NAMES is empty, treated as a one-element list.
+    GATE_POTION_NAME = nil,
     --- Wizard/Druid spell (when no Gate AA); `/cast` uses this name.
     GATE_SPELL_NAME = "Gate",
     --- Gate AA: retries when "too unstable"/collapse — wait until AltAbilityReady again, then re-cast.
@@ -191,6 +224,24 @@ local PP = {
     TRAVEL_DISMOUNT_BEFORE_GATE = true,
     TRAVEL_CITY_PREP_BEFORE_ZONE = true,
     WORN_TOTEM = "Worn Totem",
+    --- Memorize buff/invis spells only in gem slots 1..this cap (inclusive). Default 8 avoids clearing high gem indexes when NumGems() reports extra slots.
+    SPELLGEM_MEM_CAP = 8,
+    --- After Gate fails: wait this long for direct `/travelto` to next zone before falling back to PoK hub (ms).
+    TRAVEL_DIRECT_ZONE_WAIT_MS = 120000,
+    --- Objective 8 from **Neriak Commons** (Toadstool): `/easyfind <shortname>` to Foreign Quarter zone line before Gate/`/travelto` (requires MQ2EasyFind + MQ2Nav). Default false — set true if your client needs the zone-line path.
+    TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA = false,
+    --- Obj 8: after Toadstool, if Zueria Slide item + level — **Nektulos** port (faster than running out of Neriak), then Moors→Highpass when `TRAVEL_HIGHPASS_VIA_MOORS`.
+    TRAVEL_TOADSTOOL_ZUERIA_SLIDE_TO_NEK = true,
+    --- Obj 8: if Gate to PoK fails and character has **no** Gate AA and **no** Gate spell, try `/travelto moors` (Blightfire) then Highpass before PoK-hub fallback (melee / rare caster path).
+    TRAVEL_TOADSTOOL_NO_GATE_USE_MOORS_FIRST = true,
+    --- Obj 8 — **runners** (no Gate AA/spell), still in Neriak Commons: `/nav` to `TOADSTOOL_RUNNER_PRE_NERIAKA`, then `/travelto neriaka` (Foreign) before Gate/potion/moors. Set false to skip.
+    TRAVEL_TOADSTOOL_RUNNER_PRE_NERIAKA_NAV = true,
+    --- Obj 16 from NQ/SQ: if Gate to PoK fails, try **Zueria Slide** to Nektulos then `/travelto poknowledge` (faster than running through Qeynos for Slide users).
+    TRAVEL_LION_ZUERIA_SLIDE_TO_NEK = true,
+    --- Obj 13 from Highpass (after Tiger Roar): same Slide→Nek option before potion/direct `/travelto qeynos2` (was missing; used old monolithic Gate path only).
+    TRAVEL_TIGER_ZUERIA_SLIDE_TO_NEK = true,
+    --- Zone shortname for `/easyfind` (RedGuides: matches zone connection to Neriak Foreign Quarter).
+    EASYFIND_NERIAKA_SHORTNAME = "neriaka",
     MOVEMENT_CLASS_BUFFS = {
         BRD = { "Selo's Accelerando", "Selo's Song of Travel" },
         BST = { "Spirit of Wolf", "Spirit of the Shrew" },
@@ -198,27 +249,92 @@ local PP = {
         RNG = { "Spirit of Wolf" },
         SHM = { "Spirit of Wolf", "Spirit of Cheetah" },
     },
+    --- Movement AA priority (AA > spell > item). Add/remove names for your class packs.
+    MOVEMENT_SELF_AA_NAMES = {
+        "Selo's Sonata",
+        "Spirit of the White Wolf",
+    },
+    --- Preferred movement AA ids (Live-first). ID path is more reliable than AA name text.
+    MOVEMENT_SELF_AA_IDS = {},
+    --- Movement items fallback after AA/spell checks.
+    MOVEMENT_ITEM_NAMES = {
+        "Worn Totem",
+    },
+    --- Per-class spell/song **gem** invis (Live names — verify in your spellbook; script skips unknown IDs). BRD: songs (not Veil of Midnight — that name does not exist). PAL: no standard gem invis — use `INVIS_ITEM_NAMES` (e.g. Cloudy Potion).
     INVIS_CLASS_BUFFS = {
         CLR = {},
+        --- Level 19 song then 51 travel song (group invis + utilities). Ranks may read as "Shauri's Sonorous Clouding II" in book — add rank-specific names if MQ buff name differs.
+        BRD = {
+            "Shauri's Sonorous Clouding",
+            "Selo's Song of Travel",
+        },
         DRU = { "Invisibility", "Camouflage" },
-        ENC = { "Invisibility" },
+        --- Superior Invisibility (verify in spellbook — typically ENC; MAG often base Invisibility only).
+        ENC = { "Superior Invisibility", "Invisibility" },
         MAG = { "Invisibility" },
-        NEC = { "Invisibility", "Shadow" },
+        --- Living invis only (not ITU). Skin of the Shadow (improved invis, ~55+) then Gather Shadows (Lv 7 unstable). Cloak of Shadows AA via INVIS_SELF_AA_NAMES when trained.
+        NEC = { "Skin of the Shadow", "Gather Shadows" },
         RNG = { "Camouflage" },
         SHM = { "Invisibility" },
-        WIZ = { "Invisibility", "Improved Invisibility" },
+        WIZ = { "Superior Invisibility", "Improved Invisibility", "Invisibility" },
     },
     INVIS_SELF_AA_NAMES = {
         "Perfected Invisibility",
         "Improved Invisibility",
         "Invisibility",
+        --- Necro (and similar): rank 1+ gives living invis; skipped on other classes (no AA id).
+        "Cloak of Shadows",
     },
+    --- Preferred invis AA ids (Live-first). Used before AA-name fallback.
+    INVIS_SELF_AA_IDS = {},
+    INVIS_GROUP_AA_IDS = {},
     INVIS_GROUP_AA_NAMES = {
         "Group Invisibility",
         "Mass Invisibility",
         "Group Perfected Invisibility",
         "Mass Group Invisibility",
     },
+    --- Bard group invis AA: **Alt Act ID 231** per EQ Resource `articles.eqresource.com/altactlist.php` (Bard section lists it as "Shauri's Sonorious Clouding" — site typo; in-game name below).
+    INVIS_BRD_AA_IDS = { 231 },
+    --- ZAM spell/AA line name (e.g. Allakhazam `spell=51343` Shauri's Sonorous Clouding III). Used if ID path fails.
+    INVIS_BRD_AA_NAMES = { "Shauri's Sonorous Clouding" },
+    --- Optional item fallback after invis AA/spell checks — **order = preference** (first = tried first). **Cloudy Potion** is last; add other clicky names above it if you want them first. Skipped if not in bags, on reuse timer, or unusable. `INVIS_ITEM_LADDER` overrides this when set.
+    INVIS_ITEM_NAMES = {
+        "Cloudy Potion",
+    },
+    --- If set (non-empty table), used **instead of** `INVIS_ITEM_NAMES` for order (easier to experiment without clearing defaults).
+    INVIS_ITEM_LADDER = nil,
+    --- If true (default): skip invis clicky when `FindItem.Timer` not ready — try next name in list.
+    INVIS_SKIP_ITEM_IF_NOT_READY = true,
+    --- If true, and invis is up from non-AA source, try invis AA first when ready (upgrade behavior).
+    INVIS_PREFER_AA_OVER_EXISTING = true,
+    --- If > 0: when invis is up, re-apply if any **tracked** buff has `Me.Buff(name).Duration.Ticks` at or below this (EQ tick ≈ 6s). 0 = never refresh by duration (only when fully dropped). PAL potion users: try 8–15 ticks (~48–90s warning).
+    INVIS_REFRESH_MIN_TICKS_REMAINING = 0,
+    --- Extra buff **names** to read ticks on (exact `/echo ${Me.Buff[x].Name}`). Potion effects may differ from item name — add what your client shows. Merged with class spells + `INVIS_ITEM_NAMES` for tick checks.
+    INVIS_DURATION_TRACK_EXTRA_NAMES = {
+        "Cloudy Potion",
+    },
+    --- Remove troublesome lev buffs after invis/speed upkeep.
+    REMOVE_LEVITATION_BUFFS = {
+        "Shauri's Levitation",
+    },
+    --- Highpass obj 8–12: brief pause after `ensureZone` before buffs/nav (journal/zoning rhythm). Lower = snappier NPC steps.
+    HIGHPASS_ENTRY_DELAY_MS = 350,
+    --- After `/keypress hail` on Quinn / Mhrai — lets journal + target clear before next loop (was 1500).
+    HIGHPASS_POST_HAIL_DELAY_MS = 1200,
+    --- Tiger painting (obj 12): extra settle after `/nav`; face heading (EQ 0–512, 128 ≈ east) toward update.
+    TIGER_NAV_SETTLE_MS = 1200,
+    TIGER_FACE_HEADING = 128,
+    TIGER_POST_FACE_DELAY_MS = 350,
+    --- If still farther than this after nav, one re-/nav to reduce “stopped short” missed updates.
+    TIGER_NAV_RETRY_IF_DIST_GT = 22,
+    TIGER_NAV_RETRY_SETTLE_MS = 800,
+    --- Buff cast retries (short to avoid long stalls).
+    BUFF_CAST_MAX_RETRIES = 3,
+    --- Continuous upkeep: quick periodic checks while running objectives.
+    BUFF_UPKEEP_ENABLED = true,
+    BUFF_UPKEEP_CHECK_MS = 300,
+    BUFF_UPKEEP_AUTO_INVIS = true,
 
     --- Moors (395): speed + mountIfNeeded. Nektulos (25): mount + 3s pause before next /travelto. Toggle off to skip both.
     TRAVEL_POKER2_MOUNT_IN_NEK_MOORS = true,
@@ -241,9 +357,9 @@ local PP = {
     --- true = walk Highpass Hold (no keyring mount). false = mount after shrink, before invis (default).
     TRAVEL_NO_MOUNT_IN_HIGHPASS = false,
     --- Final hail Big Slick (obj 16): match Poker2 delays + journal time to credit.
-    SLICK_FINAL_POST_NAV_MS = 1200,
-    SLICK_FINAL_PRE_HAIL_MS = 1200,
-    SLICK_FINAL_POST_HAIL_MS = 4500,
+    SLICK_FINAL_POST_NAV_MS = 600,
+    SLICK_FINAL_PRE_HAIL_MS = 600,
+    SLICK_FINAL_POST_HAIL_MS = 3500,
     --- Extra dwell after moving() to Slick on quest-acquire path (init.lua Poker2 buffer before range check).
     SLICK_ACQUIRE_POST_NAV_BUFFER_MS = 3000,
     WAIT_OBJECTIVE_TIMEOUT_MS = 120000,
@@ -294,12 +410,14 @@ local PP = {
         SLUG = { 204, -243, 3 },
         BLIND_FISH = { 12, -850, -52 },
         TOADSTOOL = { -148, -994, -26 },
+        --- Neriak Commons: prep point for `/travelto neriaka` after Toadstool (runners / reliable navmesh to Foreign).
+        TOADSTOOL_RUNNER_PRE_NERIAKA = { 3.53, -464.07, -10.81 },
         QUINN = { 454, -620, 22 },
         LUMBER_1 = { -442, -215, -12 },
         LUMBER_2 = { -426, -263, -12 },
         LUMBER_3 = { -408, -267, -12 },
-        --- Tiger painting (obj 12): trial — slightly before {-125,540,-13}; may revert (wall / Gate).
-        TIGER = { -126.64, 573.41, -13.98 },
+        --- Tiger painting (obj 12): locyxz; face east (`TIGER_FACE_HEADING` 128) after nav for journal update.
+        TIGER = { -126.49, 570.88, -14.46 },
         NQ = { 118, 335, 1 },
         SQ_FISH = { -282, -230, 2 },
         SQ_LION = { 311, -173, 4 },
@@ -354,6 +472,7 @@ PP.PIC_TEST_BAR_OPTS = {
 
 -- Forward decl so header-art loader can log.
 local debugLog
+local runBuffUpkeepTick
 
 local function getImVec2(x, y)
     if imgui.ImVec2 then
@@ -1294,6 +1413,7 @@ local function moving(timeoutMs)
     local start = os.time()
     while navigationIsActive() or navigationIsPaused() or gui.navPaused do
         shouldStop()
+        runBuffUpkeepTick("moving")
         mq.delay(100)
         if (os.time() - start) * 1000 > timeoutMs then
             warn("Navigation timeout threshold reached; waiting grace period...")
@@ -1345,6 +1465,27 @@ end
 local function hasItem(name)
     local ok, found = pcall(function() return mq.TLO.FindItem(name)() end)
     return ok and found
+end
+
+--- FindItem.Timer: ready to `/useitem` (tick <= 1). Shared by gate clickies (stein, philters) and `INVIS_ITEM_NAMES`.
+local function itemClickReuseReady(itemName)
+    if not itemName or tostring(itemName) == "" then
+        return false
+    end
+    local nm = tostring(itemName)
+    local okItem, item = pcall(function() return mq.TLO.FindItem(nm) end)
+    if not okItem or not item or not item() then
+        return false
+    end
+    local okT, t = pcall(function() return item.Timer() end)
+    if not okT or t == nil then
+        return true
+    end
+    local tn = tonumber(t)
+    if tn == nil then
+        return true
+    end
+    return tn <= 1
 end
 
 --- Zueria Slide (init.lua-aligned); `PP.ZUERIA` holds constants + readiness.
@@ -1463,6 +1604,48 @@ function pppokerZueria.ensureTargetMode(mode)
     return current
 end
 
+--- Use Zueria Slide to Nektulos when item + level + mode OK. Returns true if zone ID matches Nektulos.
+function pppokerZueria.attemptSlideToNektulos(contextLabel)
+    contextLabel = contextLabel or "Zueria Slide"
+    local c = PP.ZUERIA
+    local zs = pppokerZueria.refreshReadiness()
+    if zs.summary then
+        info(zs.summary)
+    end
+    if not zs.canAttemptSlide then
+        debugLogQuiet(contextLabel .. " — slide skipped (no item or level).")
+        return false
+    end
+    local slideReady = pppokerZueria.ensureTargetMode()
+    if not slideReady or not slideReady:find(c.TARGET_MODE, 1, true) then
+        return false
+    end
+    local zid = c.ZONE_ID_NEKTULOS
+    info(contextLabel .. " — Zueria Slide to Nektulos.")
+    mq.cmdf('/useitem "%s"', slideReady)
+    info("Zueria Slide: waiting for Nektulos zone…")
+    local t0 = mq.gettime()
+    while mq.gettime() - t0 < 30000 do
+        if mq.TLO.Zone.ID() == zid then
+            info("Zueria Slide: arrived in Nektulos.")
+            break
+        end
+        mq.delay(250)
+    end
+    local zoned = (mq.TLO.Zone.ID() == zid)
+    for attempt = 1, 2 do
+        if zoned then break end
+        if mq.TLO.Me.Casting() then break end
+        mq.cmdf('/useitem "%s"', slideReady)
+        zoned = waitForZoneOrFalse(zid, 30000)
+        if zoned then break end
+    end
+    if not zoned then
+        warn("Zueria slide did not zone to Nektulos in time — continuing with Gate/PoK route.")
+    end
+    return mq.TLO.Zone.ID() == zid
+end
+
 function pppokerZueria.runAfterMementoGrog()
     local c = PP.ZUERIA
     local zs = pppokerZueria.refreshReadiness()
@@ -1476,31 +1659,7 @@ function pppokerZueria.runAfterMementoGrog()
         info("Skipping Zueria slide - using Gate/PoK routing toward Neriak.")
         return
     end
-    local slideReady = pppokerZueria.ensureTargetMode()
-    if slideReady and slideReady:find(c.TARGET_MODE, 1, true) then
-        local zid = c.ZONE_ID_NEKTULOS
-        mq.cmdf('/useitem "%s"', slideReady)
-        info("Zueria Slide: waiting for Nektulos zone…")
-        local t0 = mq.gettime()
-        while mq.gettime() - t0 < 30000 do
-            if mq.TLO.Zone.ID() == zid then
-                info("Zueria Slide: arrived in Nektulos.")
-                break
-            end
-            mq.delay(250)
-        end
-        local zoned = (mq.TLO.Zone.ID() == zid)
-        for attempt = 1, 2 do
-            if zoned then break end
-            if mq.TLO.Me.Casting() then break end
-            mq.cmdf('/useitem "%s"', slideReady)
-            zoned = waitForZoneOrFalse(zid, 30000)
-            if zoned then break end
-        end
-        if not zoned then
-            warn("Zueria slide did not zone to Nektulos in time - continuing with Gate/PoK route.")
-        end
-    end
+    pppokerZueria.attemptSlideToNektulos("After Memento Grog")
     local r = c.readiness
     if r and r.summary then
         pcall(function()
@@ -1511,16 +1670,25 @@ end
 
 PP.pppokerZueria = pppokerZueria
 
-local function findFreeGemSlotPpp()
-    local maxGems = mq.TLO.Me.NumGems() or 8
-    for i = 1, maxGems do
-        if not mq.TLO.Me.Gem(i).ID() then return i end
+local function pppokerSpellGemMemMax()
+    local raw = tonumber(mq.TLO.Me.NumGems() or 8) or 8
+    local cap = tonumber(PP.SPELLGEM_MEM_CAP)
+    if cap and cap >= 1 then
+        return math.min(cap, raw)
     end
-    local lastSlot = maxGems
-    info(string.format("all gem slots full, clearing slot %d for buff spell.", lastSlot))
-    mq.cmdf("/memspell %d clear", lastSlot)
+    return raw
+end
+
+local function findFreeGemSlotPpp()
+    local cap = pppokerSpellGemMemMax()
+    for i = 1, cap do
+        local gid = mq.TLO.Me.Gem(i).ID()
+        if not gid or tonumber(gid or 0) == 0 then return i end
+    end
+    info(string.format("all gem slots full (1-%d), clearing slot %d for buff spell.", cap, cap))
+    mq.cmdf("/memspell %d clear", cap)
     mq.delay(2000)
-    return lastSlot
+    return cap
 end
 
 local function meditateToManaPpp(requiredMana)
@@ -1546,9 +1714,123 @@ local function pppokerMovementBuffPresent()
     local class = mq.TLO.Me.Class.ShortName()
     local list = PP.MOVEMENT_CLASS_BUFFS[class]
     if list then
+        if class == "BRD" then
+            local function bardSeloActive()
+                for i = 1, 30 do
+                    local s = mq.TLO.Me.Song(i).Name()
+                    if s and s ~= "" then
+                        local sl = s:lower()
+                        if sl:find("selo", 1, true) or sl:find("movement speed", 1, true) then
+                            return s
+                        end
+                    end
+                end
+                for i = 1, 40 do
+                    local b = mq.TLO.Me.Buff(i).Name()
+                    if b and b ~= "" then
+                        local bl = b:lower()
+                        if bl:find("selo", 1, true) or bl:find("movement speed", 1, true) then
+                            return b
+                        end
+                    end
+                end
+                return nil
+            end
+            local which = bardSeloActive()
+            if which then return true, which end
+        end
         for _, spell in ipairs(list) do
-            local ok, id = pcall(function() return mq.TLO.Me.Buff(spell).ID() end)
-            if ok and id and tonumber(id or 0) > 0 then return true, spell end
+            if class == "BRD" then
+                local ok, id = pcall(function() return mq.TLO.Me.Song(spell).ID() end)
+                if ok and id and tonumber(id or 0) > 0 then return true, spell end
+            else
+                local ok, id = pcall(function() return mq.TLO.Me.Buff(spell).ID() end)
+                if ok and id and tonumber(id or 0) > 0 then return true, spell end
+            end
+        end
+    end
+    return false, nil
+end
+
+local function pppokerMovementAaBuffPresent()
+    for _, name in ipairs(PP.MOVEMENT_SELF_AA_NAMES or {}) do
+        local ok, id = pcall(function() return mq.TLO.Me.Buff(name).ID() end)
+        if ok and id and tonumber(id or 0) > 0 then
+            return true, name
+        end
+    end
+    return false, nil
+end
+
+local function aaReadyById(aaId)
+    aaId = tonumber(aaId or 0) or 0
+    if aaId <= 0 then return false end
+    local ok, out = pcall(function()
+        return mq.parse(string.format("${Me.AltAbilityReady[%d]}", aaId))
+    end)
+    if not ok or out == nil then
+        return true
+    end
+    local s = tostring(out):upper()
+    return s == "TRUE" or s == "1" or s == "ON"
+end
+
+local function tryActivateAAById(aaId, verifyFn, label)
+    aaId = tonumber(aaId or 0) or 0
+    if aaId <= 0 then return false end
+    if not aaReadyById(aaId) then
+        return false
+    end
+    info((label or "AA") .. " via /alt act " .. tostring(aaId))
+    mq.cmd("/alt act " .. tostring(aaId))
+    mq.delay(180)
+    if not verifyFn then
+        return true
+    end
+    return waitUntilMs(3000, verifyFn)
+end
+
+local function pppokerTryActivateMovementAA(aaName)
+    if not aaName or aaName == "" then return false end
+    local okId, aaId = pcall(function()
+        local a = mq.TLO.Me.AltAbility(aaName)
+        return a and tonumber(a.ID() or 0) or 0
+    end)
+    if not okId or tonumber(aaId or 0) <= 0 then
+        return false
+    end
+    local okReady, ready = pcall(function()
+        local r = mq.TLO.Me.AltAbilityReady(aaName)
+        return r and r()
+    end)
+    if not okReady or not ready then
+        return false
+    end
+    info("movement AA: " .. aaName)
+    mq.cmd("/alt act " .. tostring(aaId))
+    mq.delay(250)
+    return waitUntilMs(2500, function()
+        local okM, has = pppokerMovementBuffPresent()
+        if okM and has then return true end
+        local okA, hasAa = pppokerMovementAaBuffPresent()
+        return okA and hasAa
+    end)
+end
+
+local function pppokerApplyMovementViaAA()
+    for _, id in ipairs(PP.MOVEMENT_SELF_AA_IDS or {}) do
+        if tryActivateAAById(id, function()
+            local okM, has = pppokerMovementBuffPresent()
+            if okM and has then return true end
+            local okA, hasAa = pppokerMovementAaBuffPresent()
+            return okA and hasAa
+        end, "movement AA") then
+            return true, "id:" .. tostring(id)
+        end
+    end
+    for _, name in ipairs(PP.MOVEMENT_SELF_AA_NAMES or {}) do
+        if pppokerTryActivateMovementAA(name) then
+            return true, name
         end
     end
     return false, nil
@@ -1563,16 +1845,58 @@ local function pppokerUseWornTotemIfAvailable()
     return true
 end
 
+local function pppokerUseMovementItemList()
+    local items = PP.MOVEMENT_ITEM_NAMES or {}
+    for _, item in ipairs(items) do
+        if item and item ~= "" and hasItem(item) then
+            info("movement item: " .. tostring(item))
+            mq.cmdf('/useitem "%s"', tostring(item))
+            waitMeNotCasting(6000)
+            mq.delay(200)
+            local okM, has = pppokerMovementBuffPresent()
+            if okM and has then
+                return true, tostring(item)
+            end
+        end
+    end
+    if pppokerUseWornTotemIfAvailable() then
+        return true, PP.WORN_TOTEM
+    end
+    return false, nil
+end
+
 local function pppokerApplyMovementClassBuff()
     local class = mq.TLO.Me.Class.ShortName()
     local list = PP.MOVEMENT_CLASS_BUFFS[class]
     if not list then return false end
+    local function bardSeloActive()
+        if class ~= "BRD" then return nil end
+        for i = 1, 30 do
+            local s = mq.TLO.Me.Song(i).Name()
+            if s and s ~= "" then
+                local sl = s:lower()
+                if sl:find("selo", 1, true) or sl:find("movement speed", 1, true) then
+                    return s
+                end
+            end
+        end
+        for i = 1, 40 do
+            local b = mq.TLO.Me.Buff(i).Name()
+            if b and b ~= "" then
+                local bl = b:lower()
+                if bl:find("selo", 1, true) or bl:find("movement speed", 1, true) then
+                    return b
+                end
+            end
+        end
+        return nil
+    end
     for _, spell in ipairs(list) do
         local spellData = mq.TLO.Spell(spell)
         if spellData and spellData.ID() and tonumber(spellData.ID() or 0) > 0 then
             local gemSlot
-            local maxGems = mq.TLO.Me.NumGems() or 8
-            for i = 1, maxGems do
+            local memMax = pppokerSpellGemMemMax()
+            for i = 1, memMax do
                 local n = mq.TLO.Me.Gem(i).Name()
                 if n and n:lower() == spell:lower() then
                     gemSlot = i
@@ -1585,24 +1909,34 @@ local function pppokerApplyMovementClassBuff()
                 mq.cmdf('/memspell %d "%s"', gemSlot, spell)
                 mq.delay(8000)
             end
-            local maxRetries = 8
+            local maxRetries = tonumber(PP.BUFF_CAST_MAX_RETRIES) or 3
             for attempt = 1, maxRetries do
-                meditateToManaPpp(40)
+                if class ~= "BRD" then
+                    meditateToManaPpp(40)
+                end
                 if mq.TLO.Me.SpellReady(spell)() then
                     mq.cmd("/target myself")
                     mq.delay(400)
                     mq.cmdf('/cast "%s"', spell)
                     local castTime = spellData.CastTime() or 5000
                     waitUntilMs(castTime + 3500, function() return not mq.TLO.Me.Casting() end)
-                    mq.delay(1500)
-                    local ok, bid = pcall(function() return mq.TLO.Me.Buff(spell).ID() end)
-                    if ok and bid and tonumber(bid or 0) > 0 then
-                        info(string.format("movement buff applied: %s", mqSpell(spell)))
-                        return true
+                    mq.delay(350)
+                    if class == "BRD" then
+                        local active = bardSeloActive()
+                        if active then
+                            info(string.format("movement song active: %s", mqSpell(active)))
+                            return true
+                        end
+                    else
+                        local ok, bid = pcall(function() return mq.TLO.Me.Buff(spell).ID() end)
+                        if ok and bid and tonumber(bid or 0) > 0 then
+                            info(string.format("movement buff applied: %s", mqSpell(spell)))
+                            return true
+                        end
                     end
                     warn(string.format("%s cast did not stick (attempt %d/%d).", mqSpell(spell), attempt, maxRetries))
                 else
-                    mq.delay(2000)
+                    mq.delay(400)
                 end
             end
         end
@@ -1610,11 +1944,17 @@ local function pppokerApplyMovementClassBuff()
     return false
 end
 
-local function pppokerEnsureMovementBuff()
+local function pppokerEnsureMovementBuff(allowSpellCast)
+    if allowSpellCast == nil then allowSpellCast = true end
     local hasM, which = pppokerMovementBuffPresent()
     if hasM then return true, which end
-    if pppokerApplyMovementClassBuff() then return true, "class spell" end
-    if pppokerUseWornTotemIfAvailable() then return true, PP.WORN_TOTEM end
+    local hasAA, aaWhich = pppokerMovementAaBuffPresent()
+    if hasAA then return true, aaWhich end
+    local aaOk, aaUsed = pppokerApplyMovementViaAA()
+    if aaOk then return true, aaUsed or "movement AA" end
+    if allowSpellCast and pppokerApplyMovementClassBuff() then return true, "class spell" end
+    local itemOk, itemUsed = pppokerUseMovementItemList()
+    if itemOk then return true, itemUsed end
     return false, nil
 end
 
@@ -1634,6 +1974,42 @@ local function pppokerInvisibleTLO()
     local ok, inv = pcall(function() return mq.TLO.Me.Invisible() end)
     if ok and pppokerMqBool(inv) then return true end
     return false
+end
+
+--- `${Me.Sneaking}` — TRUE while rogue sneak is up.
+local function pppokerRogueSneakingTLO()
+    local ok, v = pcall(function()
+        local t = mq.TLO.Me.Sneaking
+        if t == nil then return false end
+        if type(t) == "function" then return t() end
+        return t
+    end)
+    return ok and pppokerMqBool(v)
+end
+
+--- `${Me.Hidden}` — TRUE while rogue hide is up (primary stealth state for /doability Hide).
+local function pppokerRogueHiddenTLO()
+    local ok, v = pcall(function()
+        local t = mq.TLO.Me.Hidden
+        if t == nil then return false end
+        if type(t) == "function" then return t() end
+        return t
+    end)
+    return ok and pppokerMqBool(v)
+end
+
+--- `${Me.AbilityReady["Sneak"]}` / `["Hide"]` — skill off cooldown; nil if TLO missing.
+local function pppokerAbilityReady(abilityName)
+    local ok, r = pcall(function()
+        local ar = mq.TLO.Me.AbilityReady(abilityName)
+        if ar == nil then return nil end
+        if type(ar) == "function" then return ar() end
+        return ar
+    end)
+    if not ok then return nil end
+    if r == true then return true end
+    if r == false then return false end
+    return nil
 end
 
 local function pppokerLivingInvisTLO()
@@ -1656,7 +2032,105 @@ local function pppokerInvisBuffIdByName(buffName)
     return false
 end
 
+--- MQ buff time remaining: `${Me.Buff[name].Duration.Ticks}` (6s/tick Live). Nil if unknown / shortbuff / API gap.
+local function pppokerBuffTicksRemainingByName(buffName)
+    if not buffName or buffName == "" then
+        return nil
+    end
+    local ok, ticks = pcall(function()
+        local b = mq.TLO.Me.Buff(buffName)
+        if not b or not b() then
+            return nil
+        end
+        local d = b.Duration
+        if type(d) == "function" then
+            d = d()
+        end
+        if d == nil then
+            return nil
+        end
+        local t = d.Ticks
+        if type(t) == "function" then
+            return tonumber(t())
+        end
+        return tonumber(t)
+    end)
+    if ok and ticks ~= nil then
+        return tonumber(ticks)
+    end
+    return nil
+end
+
+local function pppokerInvisCollectTrackableBuffNames()
+    local seen = {}
+    local out = {}
+    local function add(n)
+        if not n or n == "" or seen[n] then
+            return
+        end
+        seen[n] = true
+        out[#out + 1] = n
+    end
+    local class = mq.TLO.Me.Class.ShortName()
+    for _, n in ipairs(PP.INVIS_CLASS_BUFFS[class] or {}) do
+        add(n)
+    end
+    for _, n in ipairs(PP.INVIS_BRD_AA_NAMES or {}) do
+        add(n)
+    end
+    for _, n in ipairs(PP.INVIS_SELF_AA_NAMES) do
+        add(n)
+    end
+    for _, n in ipairs(PP.INVIS_GROUP_AA_NAMES) do
+        add(n)
+    end
+    for _, n in ipairs(PP.INVIS_ITEM_NAMES or {}) do
+        add(n)
+    end
+    for _, n in ipairs(PP.INVIS_DURATION_TRACK_EXTRA_NAMES or {}) do
+        add(n)
+    end
+    return out
+end
+
+local pppokerInvisBuffPresent
+
+--- True if invis appears up but a tracked buff is at or below tick threshold (fading soon). ROG skipped (Hide ticks unreliable here).
+local function pppokerInvisFadingBelowTicks(minTicks)
+    if not minTicks or tonumber(minTicks) <= 0 then
+        return false
+    end
+    local mt = tonumber(minTicks)
+    if mq.TLO.Me.Class.ShortName() == "ROG" then
+        return false
+    end
+    if not pppokerInvisBuffPresent() then
+        return false
+    end
+    local foundTracked = false
+    for _, name in ipairs(pppokerInvisCollectTrackableBuffNames()) do
+        if pppokerInvisBuffIdByName(name) then
+            foundTracked = true
+            local ticks = pppokerBuffTicksRemainingByName(name)
+            if ticks ~= nil and ticks <= mt then
+                return true
+            end
+        end
+    end
+    if not foundTracked then
+        -- Invis from Me.Invis / Invisible only — no named buff to read
+        return false
+    end
+    return false
+end
+
 local function pppokerInvisKnownAaBuffPresent()
+    local class = mq.TLO.Me.Class.ShortName()
+    if class == "BRD" then
+        for _, name in ipairs(PP.INVIS_BRD_AA_NAMES or {}) do
+            if pppokerInvisBuffIdByName(name) then return true, name end
+        end
+    end
     for _, name in ipairs(PP.INVIS_SELF_AA_NAMES) do
         if pppokerInvisBuffIdByName(name) then return true, name end
     end
@@ -1666,14 +2140,16 @@ local function pppokerInvisKnownAaBuffPresent()
     return false, nil
 end
 
-local function pppokerInvisBuffPresent()
+pppokerInvisBuffPresent = function()
     local class = mq.TLO.Me.Class.ShortName()
     if class == "ROG" then
+        if pppokerRogueHiddenTLO() then return true, "Hide" end
+        if pppokerRogueSneakingTLO() then return true, "Sneak" end
+        if pppokerLivingInvisTLO() then return true, "Invis(1)" end
         if pppokerInvisibleTLO() then return true, "Hide/Sneak" end
         return false, nil
     end
-    local list = PP.INVIS_CLASS_BUFFS[class]
-    if not list then return true, nil end
+    local list = PP.INVIS_CLASS_BUFFS[class] or {}
     local aaOk, aaWhich = pppokerInvisKnownAaBuffPresent()
     if aaOk then return true, aaWhich end
     for _, spell in ipairs(list) do
@@ -1733,11 +2209,64 @@ local function pppokerTryActivateInvisAA(aaName)
     end)
 end
 
+--- Caster `AltAbility("Invisibility")` resolves; Bard uses different AA names — use `INVIS_BRD_AA_NAMES` first for BRD.
+local function pppokerInvisAaSelfNameList()
+    local class = mq.TLO.Me.Class.ShortName()
+    if class == "BRD" then
+        local out = {}
+        for _, n in ipairs(PP.INVIS_BRD_AA_NAMES or {}) do
+            if n and n ~= "" then out[#out + 1] = n end
+        end
+        for _, n in ipairs(PP.INVIS_SELF_AA_NAMES or {}) do
+            if n and n ~= "" then out[#out + 1] = n end
+        end
+        return out
+    end
+    return PP.INVIS_SELF_AA_NAMES or {}
+end
+
+local function pppokerSongOrSpellReady(class, spellName)
+    if class == "BRD" then
+        local ok, r = pcall(function()
+            local sr = mq.TLO.Me.SongReady(spellName)
+            return sr and sr()
+        end)
+        return ok and r
+    end
+    local ok, r = pcall(function()
+        local sr = mq.TLO.Me.SpellReady(spellName)
+        return sr and sr()
+    end)
+    return ok and r
+end
+
 local function pppokerApplyInvisViaAA()
     local class = mq.TLO.Me.Class.ShortName()
     if class == "ROG" then return false end
-    if not PP.INVIS_CLASS_BUFFS[class] then return false end
-    for _, name in ipairs(PP.INVIS_SELF_AA_NAMES) do
+    if class == "BRD" then
+        for _, id in ipairs(PP.INVIS_BRD_AA_IDS or {}) do
+            if tryActivateAAById(id, function()
+                return pppokerLivingInvisTLO() or pppokerInvisibleTLO()
+            end, "Bard invis AA") then
+                return true
+            end
+        end
+    end
+    for _, id in ipairs(PP.INVIS_SELF_AA_IDS or {}) do
+        if tryActivateAAById(id, function()
+            return pppokerLivingInvisTLO() or pppokerInvisibleTLO()
+        end, "invis AA") then
+            return true
+        end
+    end
+    for _, id in ipairs(PP.INVIS_GROUP_AA_IDS or {}) do
+        if tryActivateAAById(id, function()
+            return pppokerLivingInvisTLO() or pppokerInvisibleTLO()
+        end, "group invis AA") then
+            return true
+        end
+    end
+    for _, name in ipairs(pppokerInvisAaSelfNameList()) do
         if pppokerTryActivateInvisAA(name) then return true end
     end
     for _, name in ipairs(PP.INVIS_GROUP_AA_NAMES) do
@@ -1746,19 +2275,68 @@ local function pppokerApplyInvisViaAA()
     return false
 end
 
+local function pppokerHasReadyInvisAA()
+    if mq.TLO.Me.Class.ShortName() == "BRD" then
+        for _, id in ipairs(PP.INVIS_BRD_AA_IDS or {}) do
+            if aaReadyById(id) then return true end
+        end
+    end
+    for _, id in ipairs(PP.INVIS_SELF_AA_IDS or {}) do
+        if aaReadyById(id) then return true end
+    end
+    for _, id in ipairs(PP.INVIS_GROUP_AA_IDS or {}) do
+        if aaReadyById(id) then return true end
+    end
+    for _, name in ipairs(pppokerInvisAaSelfNameList()) do
+        local ready = pppokerInvisAAReady(name)
+        if ready == true then return true end
+    end
+    for _, name in ipairs(PP.INVIS_GROUP_AA_NAMES or {}) do
+        local ready = pppokerInvisAAReady(name)
+        if ready == true then return true end
+    end
+    return false
+end
+
 local function pppokerRogueSneakHide()
-    info("ROG - Sneak, then Hide.")
-    mq.cmd("/doability Sneak")
-    mq.delay(800)
-    mq.cmd("/doability Hide")
-    mq.delay(1500)
-    return true
+    if pppokerRogueHiddenTLO()
+        or pppokerRogueSneakingTLO()
+        or pppokerLivingInvisTLO()
+        or pppokerInvisibleTLO()
+    then
+        return true
+    end
+    if not pppokerRogueSneakingTLO() then
+        local sneakReady = pppokerAbilityReady("Sneak")
+        if sneakReady ~= false then
+            info("ROG - Sneak (not already sneaking).")
+            mq.cmd("/doability Sneak")
+            mq.delay(800)
+        end
+    end
+    if pppokerRogueHiddenTLO()
+        or pppokerLivingInvisTLO()
+        or pppokerInvisibleTLO()
+    then
+        return true
+    end
+    if not pppokerRogueHiddenTLO() then
+        local hideReady = pppokerAbilityReady("Hide")
+        if hideReady ~= false then
+            info("ROG - Hide (not already hidden).")
+            mq.cmd("/doability Hide")
+            mq.delay(1500)
+        else
+            debugLogQuiet("ROG - Hide on cooldown; skipping /doability Hide.")
+        end
+    end
+    return pppokerRogueHiddenTLO() or pppokerInvisibleTLO()
 end
 
 local function pppokerApplyInvisClassBuff()
     local class = mq.TLO.Me.Class.ShortName()
     if class == "ROG" then
-        if pppokerInvisibleTLO() then return true end
+        if pppokerRogueHiddenTLO() or pppokerInvisibleTLO() then return true end
         return pppokerRogueSneakHide()
     end
     if pppokerInvisKnownAaBuffPresent() then return true end
@@ -1773,8 +2351,8 @@ local function pppokerApplyInvisClassBuff()
         local spellData = mq.TLO.Spell(spell)
         if spellData and spellData.ID() and tonumber(spellData.ID() or 0) > 0 then
             local gemSlot
-            local maxGems = mq.TLO.Me.NumGems() or 8
-            for i = 1, maxGems do
+            local memMax = pppokerSpellGemMemMax()
+            for i = 1, memMax do
                 local n = mq.TLO.Me.Gem(i).Name()
                 if n and n:lower() == spell:lower() then
                     gemSlot = i
@@ -1787,16 +2365,16 @@ local function pppokerApplyInvisClassBuff()
                 mq.cmdf('/memspell %d "%s"', gemSlot, spell)
                 mq.delay(8000)
             end
-            local maxRetries = 8
+            local maxRetries = tonumber(PP.BUFF_CAST_MAX_RETRIES) or 3
             for attempt = 1, maxRetries do
                 meditateToManaPpp(40)
-                if mq.TLO.Me.SpellReady(spell)() then
+                if pppokerSongOrSpellReady(class, spell) then
                     mq.cmd("/target myself")
                     mq.delay(400)
                     mq.cmdf('/cast "%s"', spell)
                     local castTime = spellData.CastTime() or 5000
                     waitUntilMs(castTime + 3500, function() return not mq.TLO.Me.Casting() end)
-                    mq.delay(1500)
+                    mq.delay(350)
                     local ok, bid = pcall(function() return mq.TLO.Me.Buff(spell).ID() end)
                     if ok and bid and tonumber(bid or 0) > 0 then
                         info(string.format("invis buff applied: %s", mqSpell(spell)))
@@ -1804,7 +2382,7 @@ local function pppokerApplyInvisClassBuff()
                     end
                     warn(string.format("invis %s did not stick (attempt %d/%d).", mqSpell(spell), attempt, maxRetries))
                 else
-                    mq.delay(2000)
+                    mq.delay(400)
                 end
             end
         end
@@ -1812,11 +2390,56 @@ local function pppokerApplyInvisClassBuff()
     return false
 end
 
-local function pppokerEnsureInvisBuff()
+local function pppokerInvisItemNamesOrdered()
+    local t = PP.INVIS_ITEM_LADDER
+    if type(t) == "table" and #t > 0 then
+        return t
+    end
+    return PP.INVIS_ITEM_NAMES or {}
+end
+
+local function pppokerApplyInvisItem()
+    for _, item in ipairs(pppokerInvisItemNamesOrdered()) do
+        if item and item ~= "" then
+            if not hasItem(item) then
+                -- missing or level/class cannot use — try next
+            elseif PP.INVIS_SKIP_ITEM_IF_NOT_READY ~= false and not itemClickReuseReady(item) then
+                info(string.format("invis item %s on reuse — next in list.", tostring(item)))
+            else
+                info("invis item: " .. tostring(item))
+                mq.cmdf('/useitem "%s"', tostring(item))
+                waitMeNotCasting(6000)
+                mq.delay(200)
+                if pppokerLivingInvisTLO() or pppokerInvisibleTLO() then
+                    return true, tostring(item)
+                end
+            end
+        end
+    end
+    return false, nil
+end
+
+local function removeLevitationBuffsIfPresent()
+    for _, buffName in ipairs(PP.REMOVE_LEVITATION_BUFFS or {}) do
+        if buffName and buffName ~= "" then
+            local ok, id = pcall(function() return mq.TLO.Me.Buff(buffName).ID() end)
+            if ok and id and tonumber(id or 0) > 0 then
+                info("removing lev buff: " .. tostring(buffName))
+                mq.cmdf('/removebuff "%s"', tostring(buffName))
+                mq.delay(80)
+            end
+        end
+    end
+end
+
+local function pppokerEnsureInvisBuff(allowSpellCast)
+    if allowSpellCast == nil then allowSpellCast = true end
     local ok, which = pppokerInvisBuffPresent()
     if ok then return true, which end
     if pppokerApplyInvisViaAA() then return true, "AA" end
-    if pppokerApplyInvisClassBuff() then return true, "spell" end
+    if allowSpellCast and pppokerApplyInvisClassBuff() then return true, "spell" end
+    local itemOk, itemWhich = pppokerApplyInvisItem()
+    if itemOk then return true, itemWhich end
     if pppokerLivingInvisTLO() then return true, "Invis(1) TLO" end
     if pppokerInvisibleTLO() then return true, "Invisible TLO" end
     return false, nil
@@ -1825,17 +2448,87 @@ end
 --- Apply invis only if not already present (avoids duplicate casts after preflight / Tassel prep).
 local function ensureInvisIfNeeded(label)
     local invOk, invWhich = pppokerInvisBuffPresent()
+    local minT = tonumber(PP.INVIS_REFRESH_MIN_TICKS_REMAINING) or 0
+    if invOk and minT > 0 and pppokerInvisFadingBelowTicks(minT) then
+        info(string.format(
+            "invis fading (≤%d ticks) — refreshing (%s).",
+            minT,
+            tostring(label)
+        ))
+        pppokerEnsureInvisBuff()
+        removeLevitationBuffsIfPresent()
+        waitUntilMs(8000, function()
+            return not mq.TLO.Me.Casting()
+        end)
+        mq.delay(300)
+        return true
+    end
     if invOk then
+        if PP.INVIS_PREFER_AA_OVER_EXISTING ~= false then
+            local aaBuffUp = pppokerInvisKnownAaBuffPresent()
+            if not aaBuffUp and pppokerHasReadyInvisAA() then
+                info(string.format(
+                    "invis up (%s), but AA ready — upgrading invis via AA (%s).",
+                    mqSpell(tostring(invWhich or "?")),
+                    tostring(label)
+                ))
+                pppokerApplyInvisViaAA()
+                removeLevitationBuffsIfPresent()
+                return true
+            end
+        end
         info(string.format("invis already up (%s) - skip recast (%s).", mqSpell(tostring(invWhich or "?")), tostring(label)))
         return true
     end
     debugLogQuiet("invis - " .. tostring(label))
     pppokerEnsureInvisBuff()
+    removeLevitationBuffsIfPresent()
     waitUntilMs(8000, function()
         return not mq.TLO.Me.Casting()
     end)
     mq.delay(300)
     return true
+end
+
+local lastBuffUpkeepTick = 0
+runBuffUpkeepTick = function(contextLabel)
+    if PP.BUFF_UPKEEP_ENABLED == false then
+        return
+    end
+    if not gui.running then
+        return
+    end
+    local now = mq.gettime()
+    local everyMs = tonumber(PP.BUFF_UPKEEP_CHECK_MS) or 1200
+    if now - lastBuffUpkeepTick < everyMs then
+        return
+    end
+    lastBuffUpkeepTick = now
+    local navMoving = navigationIsActive() or navigationIsPaused() or gui.navPaused
+    local meCasting = false
+    pcall(function()
+        meCasting = mq.TLO.Me.Casting() and true or false
+    end)
+    -- Keep AA/item checks active while moving/casting; restrict gem casts only.
+    local allowSpellCast = (not navMoving) and (not meCasting)
+    local movOk = pppokerMovementBuffPresent()
+    if not movOk then
+        pppokerEnsureMovementBuff(allowSpellCast)
+    end
+    if PP.BUFF_UPKEEP_AUTO_INVIS ~= false then
+        local invOk = pppokerInvisBuffPresent()
+        local minT = tonumber(PP.INVIS_REFRESH_MIN_TICKS_REMAINING) or 0
+        if invOk and minT > 0 and pppokerInvisFadingBelowTicks(minT) then
+            debugLogQuiet("upkeep invis fading - " .. tostring(contextLabel))
+            pppokerEnsureInvisBuff(allowSpellCast)
+        elseif not invOk then
+            if contextLabel then
+                debugLogQuiet("upkeep invis - " .. tostring(contextLabel))
+            end
+            pppokerEnsureInvisBuff(allowSpellCast)
+        end
+        removeLevitationBuffsIfPresent()
+    end
 end
 
 --- One Guise click per Run; one shrink /popup per Run (reset at runQuest start).
@@ -2055,15 +2748,13 @@ local function distanceMeToLocYXZ(loc)
     if not loc or not loc[1] then
         return 99999
     end
-    local okY, my = pcall(function() return mq.TLO.Me.Y() end)
-    local okX, mx = pcall(function() return mq.TLO.Me.X() end)
-    local okZ, mz = pcall(function() return mq.TLO.Me.Z() end)
-    if not (okY and okX and okZ) then
+    local ok, my, mx, mz = pcall(function()
+        return mq.TLO.Me.Y(), mq.TLO.Me.X(), mq.TLO.Me.Z()
+    end)
+    if not ok then
         return 99999
     end
-    local dy = (my or 0) - loc[1]
-    local dx = (mx or 0) - loc[2]
-    local dz = (mz or 0) - loc[3]
+    local dy, dx, dz = (my or 0) - loc[1], (mx or 0) - loc[2], (mz or 0) - loc[3]
     return math.sqrt(dx * dx + dy * dy + dz * dz)
 end
 
@@ -2141,10 +2832,59 @@ local function hasGateSpell()
     return ok and has
 end
 
+local function gatePotionNamesList()
+    local t = PP.GATE_POTION_NAMES
+    if type(t) == "table" and #t > 0 then
+        return t
+    end
+    local single = PP.GATE_POTION_NAME
+    if single and tostring(single) ~= "" then
+        return { tostring(single) }
+    end
+    return { "Philter of Major Translocation" }
+end
+
 local function hasGatePotion()
-    local n = PP.GATE_POTION_NAME or "Philter of Major Translocation"
-    local ok, found = pcall(function() return mq.TLO.FindItem(n)() end)
-    return ok and found
+    for _, n in ipairs(gatePotionNamesList()) do
+        local ok, found = pcall(function() return mq.TLO.FindItem(n)() end)
+        if ok and found then return true end
+    end
+    return false
+end
+
+local function gateSteinName()
+    local n = PP.GATE_STEIN_NAME
+    if not n or tostring(n) == "" then
+        return nil
+    end
+    return tostring(n)
+end
+
+local function hasGateStein()
+    local n = gateSteinName()
+    if not n then
+        return false
+    end
+    return hasItem(n)
+end
+
+local function hasZueriaSlideForGateLadder()
+    local zs = pppokerZueria.refreshReadiness()
+    return zs.canAttemptSlide
+end
+
+--- Stein, philters, or Zueria Slide item+level — any enables the Gate item phase.
+local function hasAnyGateItemPath()
+    if hasGateStein() then
+        return true
+    end
+    if hasGatePotion() then
+        return true
+    end
+    if hasZueriaSlideForGateLadder() then
+        return true
+    end
+    return false
 end
 
 local function gateAltAbilityReady()
@@ -2161,21 +2901,9 @@ local function gateSpellReady()
     return ok and r
 end
 
---- FindItem.Timer tick-based: 0/1 = ready to click (see MQ docs / community notes).
+--- Alias: gate philters / stein use same reuse check as `itemClickReuseReady`.
 local function gatePotionReady(potionName)
-    local okItem, item = pcall(function() return mq.TLO.FindItem(potionName) end)
-    if not okItem or not item or not item() then
-        return false
-    end
-    local okT, t = pcall(function() return item.Timer() end)
-    if not okT or t == nil then
-        return true
-    end
-    local tn = tonumber(t)
-    if tn == nil then
-        return true
-    end
-    return tn <= 1
+    return itemClickReuseReady(potionName)
 end
 
 --- After collapse or failed zone, Gate AA is on cooldown — poll until ready or timeout.
@@ -2263,6 +2991,311 @@ local function waitCastClearOrZoned(targetZoneId, maxMs)
     return mq.TLO.Zone.ID() == targetZoneId
 end
 
+--- From Neriak Commons (Toadstool): EasyFind nearest zone connection to Neriak Foreign (`neriaka`), then wait for zone / nav (RedGuides `/easyfind` + zone shortname).
+local function easyfindNeriakForeignFromCommonsIfNeeded()
+    if PP.TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA == false then
+        return
+    end
+    if mq.TLO.Zone.ID() ~= PP.ZONE.NERIAK_B then
+        return
+    end
+    local short = tostring(PP.EASYFIND_NERIAKA_SHORTNAME or "neriaka"):gsub("^%s+", ""):gsub("%s+$", "")
+    if short == "" then
+        return
+    end
+    info("EasyFind: zone connection to Neriak Foreign Quarter (" .. short .. ") — then Gate or /travelto.")
+    mq.cmdf("/squelch /easyfind %s", short)
+    moving(180000)
+    if mq.TLO.Zone.ID() == PP.ZONE.NERIAK_A then
+        return
+    end
+    info("Waiting to zone into Neriak Foreign Quarter after EasyFind...")
+    waitForZoneOrFalse(PP.ZONE.NERIAK_A, 120000)
+end
+
+--- Drunkard's Stein — if in inventory but **on reuse timer**, skip (no long wait) so ladder can try Slide/philters.
+local function tryGateSteinToPoK()
+    local stein = gateSteinName()
+    if not stein or not mq.TLO.FindItem(stein)() then
+        return false
+    end
+    if not itemClickReuseReady(stein) then
+        info(string.format("%s on reuse — next gate item (Slide/philter).", stein))
+        return false
+    end
+    local waitReadyMs = PP.GATE_WAIT_READY_MS or 240000
+    local zoneWaitMs = PP.GATE_ZONE_WAIT_MS or 90000
+    local postPotionWait = PP.GATE_POST_POTION_EXTRA_WAIT_MS or 2200
+    local retryBackoff = PP.GATE_RETRY_BACKOFF_MS or 1200
+    local potionAttempts = PP.GATE_POTION_ATTEMPTS or 4
+    for p = 1, potionAttempts do
+        shouldStop()
+        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+            return true
+        end
+        if not mq.TLO.FindItem(stein)() then
+            return false
+        end
+        if not itemClickReuseReady(stein) then
+            if not waitUntilGatePotionReady(stein, waitReadyMs) then
+                break
+            end
+        end
+        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+            return true
+        end
+        if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
+            dismountIfMounted("Gate stein")
+        end
+        info(string.format("%s to PoK (attempt %d/%d).", stein, p, potionAttempts))
+        mq.cmd('/useitem "' .. stein .. '"')
+        mq.delay(600)
+        if waitCastClearOrZoned(PP.GATE_ZONE_ID, 60000) then
+            return true
+        end
+        mq.delay(postPotionWait)
+        if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+            return true
+        end
+        warn(string.format("%s did not reach PoK — waiting for item timer.", stein))
+        mq.delay(retryBackoff)
+        if not waitUntilGatePotionReady(stein, waitReadyMs) then
+            break
+        end
+    end
+    return mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+end
+
+--- Philter / Vial list — **skip** entries on reuse timer (try next name); wait only between retries of the **same** clicky after a failed attempt.
+local function tryGatePotionsClickiesToPoK()
+    if not hasGatePotion() then
+        return false
+    end
+    local waitReadyMs = PP.GATE_WAIT_READY_MS or 240000
+    local zoneWaitMs = PP.GATE_ZONE_WAIT_MS or 90000
+    local postPotionWait = PP.GATE_POST_POTION_EXTRA_WAIT_MS or 2200
+    local retryBackoff = PP.GATE_RETRY_BACKOFF_MS or 1200
+    local potionAttempts = PP.GATE_POTION_ATTEMPTS or 4
+    for _, potionName in ipairs(gatePotionNamesList()) do
+        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+            return true
+        end
+        if not mq.TLO.FindItem(potionName)() then
+            -- not in inventory / unusable — next
+        elseif not itemClickReuseReady(potionName) then
+            info(string.format("%s on reuse — trying next gate clicky.", potionName))
+        else
+            for p = 1, potionAttempts do
+                shouldStop()
+                if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+                    return true
+                end
+                if not mq.TLO.FindItem(potionName)() then
+                    break
+                end
+                if not itemClickReuseReady(potionName) then
+                    if not waitUntilGatePotionReady(potionName, waitReadyMs) then
+                        break
+                    end
+                end
+                if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+                    return true
+                end
+                if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
+                    dismountIfMounted("Gate potion")
+                end
+                info(string.format("%s to PoK (attempt %d/%d).", potionName, p, potionAttempts))
+                mq.cmd('/useitem "' .. potionName .. '"')
+                mq.delay(600)
+                if waitCastClearOrZoned(PP.GATE_ZONE_ID, 60000) then
+                    return true
+                end
+                mq.delay(postPotionWait)
+                if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+                    return true
+                end
+                warn(string.format("%s did not reach PoK (fail/collapse) — waiting for item timer.", potionName))
+                mq.delay(retryBackoff)
+                if not waitUntilGatePotionReady(potionName, waitReadyMs) then
+                    break
+                end
+            end
+        end
+    end
+    return mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+end
+
+--- Gate AA then Gate spell only (no potions). Used to enforce AA→Spell→Item→Potion→Run ordering.
+local function tryGateToPoK_AAorSpellOnly()
+    if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
+        dismountIfMounted("Gate")
+    end
+    if mq.TLO.Me.ZoneBound.ID() ~= PP.GATE_ZONE_ID then
+        return false
+    end
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+        return true
+    end
+
+    local maxAttempts = PP.GATE_MAX_ATTEMPTS or 12
+    local waitReadyMs = PP.GATE_WAIT_READY_MS or 240000
+    local zoneWaitMs = PP.GATE_ZONE_WAIT_MS or 90000
+    local postCastWait = PP.GATE_POST_CAST_EXTRA_WAIT_MS or 2000
+    local retryBackoff = PP.GATE_RETRY_BACKOFF_MS or 1200
+    local spellName = PP.GATE_SPELL_NAME or "Gate"
+
+    if hasGateAA() then
+        for attempt = 1, maxAttempts do
+            shouldStop()
+            if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+                return true
+            end
+            if not gateAltAbilityReady() then
+                if not waitUntilGateAltReady(waitReadyMs) then
+                    warn("Gate AA did not become ready in time — skipping AA.")
+                    break
+                end
+            end
+            if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
+                dismountIfMounted("Gate")
+            end
+            info(string.format("Gate AA to Plane of Knowledge (attempt %d/%d).", attempt, maxAttempts))
+            mq.cmd("/alt act " .. tostring(PP.GATE_ALT_ACT_ID))
+            mq.delay(600)
+            if waitCastClearOrZoned(PP.GATE_ZONE_ID, 60000) then
+                return true
+            end
+            mq.delay(postCastWait)
+            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+                return true
+            end
+            mq.delay(retryBackoff)
+        end
+    end
+
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+        return true
+    end
+
+    if hasGateSpell() then
+        for attempt = 1, maxAttempts do
+            shouldStop()
+            if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+                return true
+            end
+            if not gateSpellReady() then
+                if not waitUntilGateSpellReady(waitReadyMs) then
+                    warn("Gate spell did not become ready in time — skipping spell.")
+                    break
+                end
+            end
+            if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
+                dismountIfMounted("Gate spell")
+            end
+            info(string.format("Gate spell %s to PoK (attempt %d/%d).", mqSpell(spellName), attempt, maxAttempts))
+            mq.cmdf('/cast "%s"', spellName)
+            mq.delay(600)
+            if waitCastClearOrZoned(PP.GATE_ZONE_ID, 60000) then
+                return true
+            end
+            mq.delay(postCastWait)
+            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+                return true
+            end
+            mq.delay(retryBackoff)
+        end
+    end
+
+    return mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+end
+
+--- Forward declarations (mutual: item phase ↔ after-slide travel).
+local tryGateItemPhaseToPoK
+local tryGateToPoKAfterZueriaSlide
+local tryGateToPoKAfterZueriaSlideOrTravel
+
+--- After Zueria Slide to Nektulos: AA → spell → `GATE_ITEM_LADDER` with Slide step inactive (`none`).
+tryGateToPoKAfterZueriaSlide = function()
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+        return true
+    end
+    if tryGateToPoK_AAorSpellOnly() then
+        return true
+    end
+    return tryGateItemPhaseToPoK("none")
+end
+
+--- Slide landed in Nek — Gate to PoK or `/travelto poknowledge`.
+tryGateToPoKAfterZueriaSlideOrTravel = function()
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+        return true
+    end
+    if tryGateToPoKAfterZueriaSlide() then
+        return true
+    end
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+        return true
+    end
+    warn("After Zueria Slide — Gate to PoK unavailable or failed; /travelto " .. tostring(PP.POK_TRAVEL_SHORTNAME or "poknowledge") .. ".")
+    mq.cmdf("/squelch /travelto %s", PP.POK_TRAVEL_SHORTNAME or "poknowledge")
+    if not waitForZoneOrFalse(PP.GATE_ZONE_ID, 180000) then
+        fail("Could not reach Plane of Knowledge after Nektulos.")
+    end
+    return true
+end
+
+--- Zueria Slide allowed for this travel mode (tiger/lion/monolithic gate_full).
+local function gateItemPhaseZueriaSlideEnabled(zueriaMode)
+    if zueriaMode == "gate_full" and PP.GATE_ITEM_PHASE_ZUERIA_SLIDE ~= false then
+        return true
+    end
+    if zueriaMode == "tiger" and PP.TRAVEL_TIGER_ZUERIA_SLIDE_TO_NEK ~= false then
+        return true
+    end
+    if zueriaMode == "lion" and PP.TRAVEL_LION_ZUERIA_SLIDE_TO_NEK ~= false then
+        return true
+    end
+    return false
+end
+
+--- Item phase: `PP.GATE_ITEM_LADDER` order (default stein → zueria_slide → potions). Skip step if unusable; stein/philter skip reuse without blocking Slide.
+tryGateItemPhaseToPoK = function(zueriaMode)
+    zueriaMode = zueriaMode or "none"
+    local ladder = PP.GATE_ITEM_LADDER or { "stein", "zueria_slide", "potions" }
+    local slideEnabled = gateItemPhaseZueriaSlideEnabled(zueriaMode)
+    for _, step in ipairs(ladder) do
+        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+            return true
+        end
+        local s = tostring(step or ""):lower():gsub("^%s+", ""):gsub("%s+$", "")
+        if s == "stein" or s == "gate_stein" or s == "drunkard" or s == "drunkard_stein" then
+            if tryGateSteinToPoK() then
+                return true
+            end
+        elseif s == "zueria_slide" or s == "slide" or s == "zueria" then
+            if slideEnabled then
+                local label = "Gate ladder → Nektulos (Zueria Slide)"
+                if zueriaMode == "tiger" then
+                    label = "Tiger Roar → Nektulos (Zueria Slide)"
+                elseif zueriaMode == "lion" then
+                    label = "Lion's Mane → Nektulos (Zueria Slide)"
+                end
+                if pppokerZueria.attemptSlideToNektulos(label) then
+                    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+                        return true
+                    end
+                    return tryGateToPoKAfterZueriaSlideOrTravel()
+                end
+            end
+        elseif s == "potions" or s == "gate_potions" or s == "philters" or s == "potion" then
+            if tryGatePotionsClickiesToPoK() then
+                return true
+            end
+        end
+    end
+    return mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+end
+
 local function tryGateToPoK()
     if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
         dismountIfMounted("Gate")
@@ -2276,9 +3309,9 @@ local function tryGateToPoK()
 
     local canAA = hasGateAA()
     local canSpell = hasGateSpell()
-    local canPot = hasGatePotion()
-    if not canAA and not canSpell and not canPot then
-        info("no Gate AA, no Gate spell, no gate potion — skipping Gate waits (use /travelto or manual).")
+    local canItems = hasAnyGateItemPath()
+    if not canAA and not canSpell and not canItems then
+        info("no Gate AA, no Gate spell, no gate items (stein / slide / philter) — skipping Gate waits (use /travelto or manual).")
         return false
     end
 
@@ -2286,10 +3319,8 @@ local function tryGateToPoK()
     local waitReadyMs = PP.GATE_WAIT_READY_MS or 240000
     local zoneWaitMs = PP.GATE_ZONE_WAIT_MS or 90000
     local postCastWait = PP.GATE_POST_CAST_EXTRA_WAIT_MS or 2000
-    local postPotionWait = PP.GATE_POST_POTION_EXTRA_WAIT_MS or 2200
-    local retryBackoff = PP.GATE_RETRY_BACKOFF_MS or 1200
     local spellName = PP.GATE_SPELL_NAME or "Gate"
-    local potionName = PP.GATE_POTION_NAME or "Philter of Major Translocation"
+    local retryBackoff = PP.GATE_RETRY_BACKOFF_MS or 1200
 
     if canAA then
         for attempt = 1, maxAttempts do
@@ -2299,7 +3330,7 @@ local function tryGateToPoK()
             end
             if not gateAltAbilityReady() then
                 if not waitUntilGateAltReady(waitReadyMs) then
-                    warn("Gate AA did not become ready in time — trying spell or potion if available.")
+                    warn("Gate AA did not become ready in time — trying spell or items if available.")
                     break
                 end
             end
@@ -2340,7 +3371,7 @@ local function tryGateToPoK()
             end
             if not gateSpellReady() then
                 if not waitUntilGateSpellReady(waitReadyMs) then
-                    warn("Gate spell did not become ready in time — trying potion if available.")
+                    warn("Gate spell did not become ready in time — trying items if available.")
                     break
                 end
             end
@@ -2373,47 +3404,57 @@ local function tryGateToPoK()
         return true
     end
 
-    local potionAttempts = PP.GATE_POTION_ATTEMPTS or 4
-    if canPot then
-        for p = 1, potionAttempts do
-            shouldStop()
-            if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
-                return true
-            end
-            if not mq.TLO.FindItem(potionName)() then
-                break
-            end
-            if not gatePotionReady(potionName) then
-                if not waitUntilGatePotionReady(potionName, waitReadyMs) then
-                    warn("Gate potion still on reuse timer — giving up on potion.")
-                    break
-                end
-            end
-            if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
-                return true
-            end
-            if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
-                dismountIfMounted("Gate potion")
-            end
-            info(string.format("%s to PoK (attempt %d/%d).", potionName, p, potionAttempts))
-            mq.cmd('/useitem "' .. potionName .. '"')
-            mq.delay(600)
-            if waitCastClearOrZoned(PP.GATE_ZONE_ID, 60000) then
-                return true
-            end
-            mq.delay(postPotionWait)
-            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
-                return true
-            end
-            warn(string.format("%s did not reach PoK (fail/collapse) — waiting for item timer.", potionName))
-            mq.delay(retryBackoff)
-            if not waitUntilGatePotionReady(potionName, waitReadyMs) then
-                break
-            end
+    if canItems then
+        if tryGateItemPhaseToPoK("gate_full") then
+            return true
         end
     end
 
     return mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+end
+
+--- Gate items only (no AA/spell): Stein → Zueria (per mode) → philters. `zueriaMode`: `"tiger"` | `"lion"` | `"none"` | `"gate_full"`.
+local function tryGateToPoK_PotionsOnly(zueriaMode)
+    if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
+        dismountIfMounted("Gate item")
+    end
+    if mq.TLO.Me.ZoneBound.ID() ~= PP.GATE_ZONE_ID then
+        return false
+    end
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
+        return true
+    end
+    if not hasAnyGateItemPath() then
+        return false
+    end
+    return tryGateItemPhaseToPoK(zueriaMode or "none")
+end
+
+--- Gate/potion to PoK when possible; otherwise `/travelto` PoK hub (same pattern as East FP → Neriak).
+local function tryGateToPoKOrTraveltoPok()
+    if tryGateToPoK() then return true end
+    warn("Gate/potion to PoK unavailable or failed - /travelto " .. tostring(PP.POK_TRAVEL_SHORTNAME or "poknowledge") .. ".")
+    mq.cmdf("/squelch /travelto %s", PP.POK_TRAVEL_SHORTNAME or "poknowledge")
+    if not waitForZoneOrFalse(PP.GATE_ZONE_ID, 180000) then
+        fail("Could not reach Plane of Knowledge.")
+    end
+    return true
+end
+
+--- Gate first; if still needed, one-hop `/travelto` to `directZoneId` (fast, matches pre-2.86); PoK hub only if direct does not complete in time.
+local function tryGateDirectOrPokFallback(directTravelArg, directZoneId, directLabel)
+    directLabel = directLabel or tostring(directTravelArg)
+    if tryGateToPoK() then return true end
+    if directTravelArg and directZoneId then
+        local waitMs = tonumber(PP.TRAVEL_DIRECT_ZONE_WAIT_MS) or 120000
+        info(string.format("No Gate — direct /travelto %s (%s).", tostring(directTravelArg), directLabel))
+        mq.cmdf("/squelch /travelto %s", directTravelArg)
+        if waitForZoneOrFalse(directZoneId, waitMs) then
+            return true
+        end
+        warn(string.format("Direct travel to %s timed out — routing via Plane of Knowledge.", directLabel))
+    end
+    return tryGateToPoKOrTraveltoPok()
 end
 
 --- After Run passes journal checks: speed, mount, Zueria snapshot, Guise shrink (once per Run). No invis here — apply invis in prepBeforeTasselLeg / zone helpers.
@@ -2527,13 +3568,7 @@ local function travelToPokHubThenNeriakFromEastFp()
     end
     info("East FP route - Plane of Knowledge hub, then Neriak Foreign (Hodstock bypass).")
     if mq.TLO.Zone.ID() ~= PP.ZONE.POK then
-        if not tryGateToPoK() then
-            warn("Gate/potion to PoK unavailable or failed - /travelto " .. tostring(PP.POK_TRAVEL_SHORTNAME) .. ".")
-            mq.cmdf("/squelch /travelto %s", PP.POK_TRAVEL_SHORTNAME or "poknowledge")
-            if not waitForZoneOrFalse(PP.GATE_ZONE_ID, 180000) then
-                fail("Could not reach Plane of Knowledge before Neriak travel.")
-            end
-        end
+        tryGateToPoKOrTraveltoPok()
     end
     mountIfNeeded()
     mq.delay(2000)
@@ -2605,22 +3640,46 @@ local function doBettyPocketInteraction()
     mq.delay(1000)
 end
 
-local function expectedCWTNPluginName()
-    local short = (mq.TLO.Me.Class.ShortName() or ""):upper()
+--- Plugin DLL names vary by build/CWTN (e.g. NEC is MQ2Necro not MQ2Necromancer). Try each until IsLoaded().
+local function cwtnPluginNamesForClass(short)
+    short = (short or ""):upper()
     local map = {
-        BRD = "MQ2Bard", BST = "MQ2Bst", BER = "MQ2Berserker", CLR = "MQ2Cleric",
-        DRU = "MQ2Druid", ENC = "MQ2Enchanter", MAG = "MQ2Mage", MNK = "MQ2Monk",
-        NEC = "MQ2Necromancer", PAL = "MQ2Paladin", RNG = "MQ2Ranger", ROG = "MQ2Rogue",
-        SHD = "MQ2ShadowKnight", SHM = "MQ2Shaman", WAR = "MQ2Warrior", WIZ = "MQ2Wizard",
+        BRD = { "MQ2Bard", "mq2bard" },
+        BST = { "MQ2Bst" },
+        BER = { "MQ2Berserker" },
+        CLR = { "MQ2Cleric" },
+        DRU = { "MQ2Druid" },
+        ENC = { "MQ2Enchanter" },
+        MAG = { "MQ2Mage" },
+        MNK = { "MQ2Monk" },
+        NEC = { "MQ2Necro", "MQ2Necromancer" },
+        PAL = { "MQ2Paladin" },
+        RNG = { "MQ2Ranger" },
+        ROG = { "MQ2Rogue" },
+        SHD = { "MQ2ShadowKnight" },
+        SHM = { "MQ2Shaman" },
+        WAR = { "MQ2Warrior" },
+        WIZ = { "MQ2Wizard" },
     }
     return map[short]
 end
 
+local function firstLoadedCwtnPluginFromList(names)
+    if not names then return nil end
+    for _, pluginName in ipairs(names) do
+        local ok, loaded = pcall(function() return mq.TLO.Plugin(pluginName).IsLoaded() end)
+        if ok and loaded then return pluginName end
+    end
+    return nil
+end
+
 local function isExpectedCWTNPluginLoaded()
-    local pluginName = expectedCWTNPluginName()
-    if not pluginName then return false, nil end
-    local ok, loaded = pcall(function() return mq.TLO.Plugin(pluginName).IsLoaded() end)
-    return ok and loaded or false, pluginName
+    local short = (mq.TLO.Me.Class.ShortName() or ""):upper()
+    local names = cwtnPluginNamesForClass(short)
+    if not names then return false, nil end
+    local loadedName = firstLoadedCwtnPluginFromList(names)
+    if loadedName then return true, loadedName end
+    return false, names[1]
 end
 
 --- Parse ${CWTN...} for paused/on/off; returns true/false/nil if unknown or parse error.
@@ -3027,6 +4086,7 @@ local function waitObjectiveDone(taskName, idx, timeoutMs)
     local nextSync = t0
     while mq.gettime() - t0 < timeoutMs do
         shouldStop()
+        runBuffUpkeepTick("wait objective")
         if journalSyncMode() ~= "open_once_no_fetch"
             and PP.WAIT_JOURNAL_SYNC_MS and PP.WAIT_JOURNAL_SYNC_MS > 0
             and mq.gettime() >= nextSync then
@@ -3067,7 +4127,7 @@ local function waitObjectiveDone(taskName, idx, timeoutMs)
                     stStr = tostring(obj.Status() or "")
                 end
             end)
-            debugLog(string.format(
+            debugLogQuiet(string.format(
                 "Waiting objective %d... %s | Status=%s",
                 idx,
                 instr,
@@ -3144,6 +4204,140 @@ local function poker2MountDelayInNekOrMoors()
     mq.delay(3000)
 end
 
+--- PoK, Nektulos, or Moors → optional Moors hop + Highpass Hold (obj 8 tail / resume).
+local function finishLegToHighpassHold()
+    local z = mq.TLO.Zone.ID()
+    if z == PP.ZONE.HIGHPASS then
+        return
+    end
+    if z == PP.GATE_ZONE_ID then
+        if PP.TRAVEL_HIGHPASS_VIA_MOORS ~= false then
+            ensureZone(PP.ZONE.MOORS, "moors", "Blightfire Moors")
+        end
+        poker2MountDelayInNekOrMoors()
+        ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
+        return
+    end
+    if z == PP.ZONE.NEKTULOS then
+        poker2MountDelayInNekOrMoors()
+        if PP.TRAVEL_HIGHPASS_VIA_MOORS ~= false then
+            ensureZone(PP.ZONE.MOORS, "moors", "Blightfire Moors")
+        end
+        poker2MountDelayInNekOrMoors()
+        ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
+        return
+    end
+    if z == PP.ZONE.MOORS then
+        poker2MountDelayInNekOrMoors()
+        ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
+        return
+    end
+end
+
+--- No Gate AA/spell (runners): from Neriak Commons, nav to prep loc, then `/travelto neriaka` (Foreign) before Gate/moors.
+local function runnerCommonsNavThenTraveltoNeriakaIfNeeded()
+    if PP.TRAVEL_TOADSTOOL_RUNNER_PRE_NERIAKA_NAV == false then
+        return
+    end
+    if mq.TLO.Zone.ID() ~= PP.ZONE.NERIAK_B then
+        return
+    end
+    if hasGateAA() or hasGateSpell() then
+        return
+    end
+    local loc = PP.LOC.TOADSTOOL_RUNNER_PRE_NERIAKA
+    if type(loc) ~= "table" or loc[1] == nil or loc[2] == nil or loc[3] == nil then
+        return
+    end
+    info("Runner path — nav to Foreign Quarter prep, then /travelto neriaka.")
+    navLocNoMount(loc, 1200)
+    moving()
+    mq.delay(600)
+    mq.cmd("/squelch /travelto neriaka")
+    local waitMs = tonumber(PP.TRAVEL_DIRECT_ZONE_WAIT_MS) or 120000
+    if not waitForZoneOrFalse(PP.ZONE.NERIAK_A, waitMs) then
+        warn("Did not zone to Neriak Foreign Quarter after /travelto neriaka — continuing.")
+    end
+end
+
+--- After Toadstool (obj 7): optional EasyFind, Zueria slide→Nek, Gate/potion PoK, or `/travelto moors` when no Gate AA/spell, then Highpass.
+local function leaveToadstoolTowardHighpass()
+    if mq.TLO.Zone.ID() ~= PP.ZONE.NERIAK_A and mq.TLO.Zone.ID() ~= PP.ZONE.NERIAK_B then
+        return
+    end
+    info("Toadstool done — routing toward Highpass Hold.")
+    easyfindNeriakForeignFromCommonsIfNeeded()
+
+    -- Capability ladder: AA → Spell → Stein → Slide (Nek shortcut) → philter → Run
+    if tryGateToPoK_AAorSpellOnly() then
+        finishLegToHighpassHold()
+        mq.delay(2000)
+        return
+    end
+
+    if tryGateSteinToPoK() then
+        finishLegToHighpassHold()
+        mq.delay(2000)
+        return
+    end
+
+    if PP.TRAVEL_TOADSTOOL_ZUERIA_SLIDE_TO_NEK ~= false then
+        if pppokerZueria.attemptSlideToNektulos("Toadstool → Nektulos (Zueria Slide)") then
+            finishLegToHighpassHold()
+            mq.delay(2000)
+            return
+        end
+    end
+
+    if tryGatePotionsClickiesToPoK() then
+        finishLegToHighpassHold()
+        mq.delay(2000)
+        return
+    end
+
+    runnerCommonsNavThenTraveltoNeriakaIfNeeded()
+
+    if (PP.TRAVEL_TOADSTOOL_NO_GATE_USE_MOORS_FIRST ~= false)
+        and (not hasGateAA())
+        and (not hasGateSpell())
+    then
+        info("No Gate AA/spell — runner-style zone chain: neriaka → nektulos → moors → highpasshold.")
+        ensureZone(PP.ZONE.NERIAK_A, "neriaka", "Neriak Foreign Quarter")
+        ensureZone(PP.ZONE.NEKTULOS, "nektulos", "Nektulos Forest")
+        poker2MountDelayInNekOrMoors()
+        ensureZone(PP.ZONE.MOORS, "moors", "Blightfire Moors")
+        poker2MountDelayInNekOrMoors()
+        ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
+        mq.delay(2000)
+        return
+    end
+
+    tryGateDirectOrPokFallback("highpasshold", PP.ZONE.HIGHPASS, "Highpass Hold")
+    mq.delay(2000)
+    finishLegToHighpassHold()
+end
+
+--- After Tiger Roar (obj 12): Highpass → North Qeynos — same capability ladder as Lion / Toadstool (AA/spell → Slide → potion → `tryGateDirectOrPokFallback`).
+local function leaveHighpassTowardNorthQeynos()
+    if mq.TLO.Zone.ID() ~= PP.ZONE.HIGHPASS then
+        return
+    end
+    info("Tiger Roar done — routing toward North Qeynos (AA → spell → Stein → Slide → philter → run).")
+
+    if tryGateToPoK_AAorSpellOnly() then
+        mq.delay(2000)
+        return
+    end
+
+    if tryGateToPoK_PotionsOnly("tiger") then
+        mq.delay(2000)
+        return
+    end
+
+    tryGateDirectOrPokFallback("qeynos2", PP.ZONE.NQ, "North Qeynos")
+    mq.delay(2000)
+end
+
 local function runObjectiveStep(idx, task)
     local instr = objInstruction(task, idx)
     gui.step = idx
@@ -3215,56 +4409,58 @@ local function runObjectiveStep(idx, task)
         mq.delay(1200)
     elseif idx == 8 then
         if mq.TLO.Zone.ID() == PP.ZONE.NERIAK_B or mq.TLO.Zone.ID() == PP.ZONE.NERIAK_A then
-            info("Toadstool done - Gate/potion to PoK hub, then Highpass.")
-            tryGateToPoK()
-            mq.delay(2000)
+            leaveToadstoolTowardHighpass()
         end
-        if (PP.TRAVEL_HIGHPASS_VIA_MOORS ~= false)
-            and mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
-            and mq.TLO.Zone.ID() ~= PP.ZONE.HIGHPASS
-        then
-            ensureZone(PP.ZONE.MOORS, "moors", "Blightfire Moors")
+        if mq.TLO.Zone.ID() ~= PP.ZONE.HIGHPASS then
+            finishLegToHighpassHold()
         end
-        poker2MountDelayInNekOrMoors()
-        ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
-        mq.delay(500)
+        if mq.TLO.Zone.ID() ~= PP.ZONE.HIGHPASS then
+            poker2MountDelayInNekOrMoors()
+            ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
+        end
+        mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
         ensureSpeedShrinkInvisInHighpass("objective 8 (Highpass)")
         navLoc(PP.LOC.QUINN, 1000)
     elseif idx == 9 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
-        mq.delay(500)
+        mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
         ensureSpeedShrinkInvisInHighpass("objective 9 (Highpass - Quinn)")
         navLoc(PP.LOC.QUINN, 800)
         targetOrFail(PP.NPC.QUINN, "Could not target Quinn", 12000, true)
         mq.cmd('/keypress hail')
-        mq.delay(1500)
+        mq.delay(tonumber(PP.HIGHPASS_POST_HAIL_DELAY_MS) or 1200)
         mq.cmd('/target ${Me.Name}')
     elseif idx == 10 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
-        mq.delay(500)
+        mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
         ensureSpeedShrinkInvisInHighpass("objective 10 (Highpass - lumber)")
         navLocNoMount(PP.LOC.LUMBER_1, 900)
         navLocNoMount(PP.LOC.LUMBER_2, 900)
         navLocNoMount(PP.LOC.LUMBER_3, 1000)
     elseif idx == 11 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
-        mq.delay(500)
+        mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
         ensureSpeedShrinkInvisInHighpass("objective 11 (Highpass - Mhrai)")
         navLocNoMount(PP.LOC.LUMBER_3, 900)
         targetOrFail(PP.NPC.MHRAI, "Could not target Mhrai", 12000, true)
         mq.cmd('/keypress hail')
-        mq.delay(1500)
+        mq.delay(tonumber(PP.HIGHPASS_POST_HAIL_DELAY_MS) or 1200)
         mq.cmd('/target ${Me.Name}')
     elseif idx == 12 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
-        mq.delay(500)
+        mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
         ensureSpeedShrinkInvisInHighpass("objective 12 (Highpass - tiger)")
-        navLocNoMount(PP.LOC.TIGER, 1000)
+        navLocNoMount(PP.LOC.TIGER, tonumber(PP.TIGER_NAV_SETTLE_MS) or 1200)
+        local maxD = tonumber(PP.TIGER_NAV_RETRY_IF_DIST_GT) or 22
+        if distanceMeToLocYXZ(PP.LOC.TIGER) > maxD then
+            info("Tiger painting — re-nav (still > " .. tostring(maxD) .. " from loc).")
+            navLocNoMount(PP.LOC.TIGER, tonumber(PP.TIGER_NAV_RETRY_SETTLE_MS) or 800)
+        end
+        mq.cmdf("/face heading %d", tonumber(PP.TIGER_FACE_HEADING) or 128)
+        mq.delay(tonumber(PP.TIGER_POST_FACE_DELAY_MS) or 350)
     elseif idx == 13 then
         if mq.TLO.Zone.ID() == PP.ZONE.HIGHPASS then
-            info("Tiger Roar done - Gate/potion to PoK hub, then North Qeynos.")
-            tryGateToPoK()
-            mq.delay(2000)
+            leaveHighpassTowardNorthQeynos()
         end
         ensureZone(PP.ZONE.NQ, "qeynos2", "North Qeynos")
         mq.delay(500)
@@ -3282,9 +4478,16 @@ local function runObjectiveStep(idx, task)
         navLocNoMount(PP.LOC.SQ_LION, 1500)
     elseif idx == 16 then
         if mq.TLO.Zone.ID() == PP.ZONE.NQ or mq.TLO.Zone.ID() == PP.ZONE.SQ then
-            info("Lion's Mane done - Gate/potion to PoK hub, then West Freeport / Slick.")
-            tryGateToPoK()
-            mq.delay(2000)
+            info("Lion's Mane done — routing toward West Freeport / Slick.")
+            -- Capability ladder: AA → Spell → Stein → Slide → philter → Run
+            if tryGateToPoK_AAorSpellOnly() then
+                -- in PoK; continue
+            elseif tryGateToPoK_PotionsOnly("lion") then
+                -- in PoK; continue
+            else
+                tryGateToPoKOrTraveltoPok()
+            end
+            mq.delay(1000)
         end
         ensureZone(PP.ZONE.WEST_FP, "freeportwest", "West Freeport")
         gui.status = "Objective 16: navigating to Big Slick..."
@@ -3315,7 +4518,7 @@ local function runObjectiveStep(idx, task)
 end
 
 --- After /say at Slick: fetch-only first (fewer TaskWnd flashes); full open/fetch/close only if getTask still nil.
-local function syncJournalAfterKeywordTry()
+function syncJournalAfterKeywordTry()
     syncTaskJournalMinimal()
     mq.delay(400)
     if getTask() then return end
@@ -3324,7 +4527,7 @@ local function syncJournalAfterKeywordTry()
 end
 
 --- No Paintings task: zone, nav to Slick, wait in range, /say PP.SLICK_QUEST_KEYWORD, esc, journal sync. Caller re-calls getTask().
-local function tryAcquireQuestFromBigSlick()
+function tryAcquireQuestFromBigSlick()
     if not PP.TRY_BIG_SLICK_QUEST_ACQUIRE then return end
     shouldStop()
     info("No Paintings task in journal - traveling to Big Slick to acquire quest.")
@@ -3362,7 +4565,7 @@ local function tryAcquireQuestFromBigSlick()
 end
 
 --- End-of-run log: e.g. "2 min 30 seconds", "45 seconds", "1 min 0 seconds".
-local function formatQuestRunDuration(totalSec)
+function formatQuestRunDuration(totalSec)
     local sec = math.max(0, math.floor(tonumber(totalSec) or 0))
     local m = math.floor(sec / 60)
     local s = sec % 60
@@ -3373,7 +4576,7 @@ local function formatQuestRunDuration(totalSec)
 end
 
 --- Main automation: first incomplete objective → runObjectiveStep → waitObjectiveDone (objectiveIsComplete). Same data as getQuestProgress / GUI bar.
-local function runQuest()
+function runQuest()
     resetGuiseShrinkSession()
     taskJournalSyncState.openedOnce = false
     local questRunStartTime = os.time()
@@ -3445,6 +4648,7 @@ local function runQuest()
 
     while true do
         shouldStop()
+        runBuffUpkeepTick("run loop")
         task = getTask()
         if not task then
             unpauseRGMercs()
@@ -3517,7 +4721,7 @@ local function runQuest()
 end
 
 -- EQ \a codes in stored lines — map to ImVec4 for ImGui.TextColored (see changelog 2.62).
-local function mqColorLetterToImVec4(ch)
+function mqColorLetterToImVec4(ch)
     local c1 = (tostring(ch or "")):sub(1, 1):lower()
     local r, g, b, a = 0.88, 0.88, 0.92, 1.0
     if c1 == "g" then
@@ -3542,7 +4746,7 @@ local function mqColorLetterToImVec4(ch)
     return getImVec4(r, g, b, a)
 end
 
-local function parseMqColoredSegments(s)
+function parseMqColoredSegments(s)
     s = tostring(s or "")
     local defaultCol = getImVec4(0.88, 0.88, 0.92, 1)
     local parts = {}
@@ -3566,7 +4770,7 @@ local function parseMqColoredSegments(s)
     return parts
 end
 
-local function drawMqColoredDebugLine(line)
+function drawMqColoredDebugLine(line)
     local segs = parseMqColoredSegments(line)
     local wrapW = select(1, getContentRegionAvail2())
     if wrapW < 80 then
@@ -3614,7 +4818,7 @@ local function drawMqColoredDebugLine(line)
     end)
 end
 
-local function drawGUI()
+function drawGUI()
     if not gui.open then return end
     if PP.pppokerApplyInitialLayout then
         local condAlways = 1
