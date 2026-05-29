@@ -2,8 +2,21 @@
 -- Created by: RedFrog
 -- Original creation date: 03/18/2026
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
--- Version: 3.03
+-- Version: 3.16
 -- Changelog:
+-- 3.16: Shutdown cleanup — add cleanupAfterRun(): unpause RGMercs, unpause CWTN, unload MQ2AutoSize only if PPPoker loaded it (autosizePreloaded checked at script start via IIFE). cleanupAfterRun() now called on: normal quest completion, mid-run early exits (task unavailable / objectives gone), user stop, and any Lua error (pcall handler in main loop). Pre-preflight early exits (no task, no objectives, title mismatch) keep plain unpause pairs — AutoSize not yet loaded at those points.
+-- 3.15: Fix RGMercs pause — solo script, no group: /rgl pauseall -> /rgl pause, /rgl unpauseall -> /rgl unpause. AutoSize: load plugin then /autosize self 3 (consistent run size; mount size left to user's AutoSize config). Clean stale prepBeforeTasselLeg doc comment (was still referencing removed Guise shrink).
+-- 3.14: DRU/RNG camouflage fixes. DRU INVIS_CLASS_BUFFS: remove bogus "Invisibility" (DRU can't mem it — was triggering failed /memspell + 8s wait), add full camo ladder best→worst: "Improved Superior Camouflage" (Lv 48, Improved Invis), "Superior Camouflage" (Lv 18), "Camouflage" (Lv 4). RNG: add "Superior Camouflage" (Lv 47) before base "Camouflage" (Lv 14). INVIS_SELF_AA_NAMES: add "Innate Camouflage" (DRU/RNG AA, Alt Act ID 80 per EQResource). INVIS_GROUP_AA_NAMES: add "Shared Camouflage" (DRU/RNG group camo AA, Alt Act ID 518). Both AA names exit cleanly for non-DRU/RNG (AltAbility returns 0 → skipped).
+-- 3.13: Remove Guise of the Deceiver shrink system entirely (maybeGuiseShrink, resetGuiseShrinkSession, GUISE_SHRINK_ITEM, GUISE_SHRINK_HEIGHT_MIN, TRAVEL_SHRINK_IN_QEYNOS, TRAVEL_SHRINK_IN_HIGHPASS, gui.shrinkUsed, gui.shrinkPopupShown). Add MQ2AutoSize plugin check/load in runPreflightAfterQuestChecks. Rename ensureSpeedShrinkInvisInHighpass -> ensureSpeedInvisInHighpass (all 5 call sites). Hoist bardSeloActive to module scope (safe now: 14 free slots); remove inner copies from pppokerMovementBuffPresent + pppokerApplyMovementClassBuff. Make syncJournalAfterKeywordTry + tryAcquireQuestFromBigSlick local (previously blocked by 200-local limit). Local count: 187.
+-- 3.12: Phase 1 — move 8 state vars into gui table (shrinkUsed, shrinkPopupShown, lastBuffUpkeepTick, rgmercPaused, journalOpenedOnce, barLiveOpts, shimmerState, commIconTex); freed 8 locals. Phase 2 — merge waitUntilGateAltReady+waitUntilGateSpellReady into waitUntilGateReady(checkFn,label,maxMs); inline gatePotionReady alias into waitUntilGatePotionReady; freed 2 locals. Phase 3 — collapse navigationIsActive+navigationIsPaused from ~80 lines to ~36 by removing duplicate inner helper functions (no locals changed). Phase 4 — waitForZoneOrFalse uses mq.gettime() consistently; hasAnyGateItemPath collapsed to single return. Total: 196 -> 186 module locals (14 slots freed).
+-- 3.11: Revert local on syncJournalAfterKeywordTry / tryAcquireQuestFromBigSlick — script was at the 200-local LuaJIT limit; these two additions pushed it over. Restored as globals.
+-- 3.10: Revert bardSeloActive hoist — LuaJIT hard limit of 200 locals per scope; module-level local pushed main chunk over limit. Restored as inner function in both call sites (inner locals do not count against main chunk).
+-- 3.09: syncJournalAfterKeywordTry / tryAcquireQuestFromBigSlick — add missing local; both were inadvertent globals leaking into _G.
+-- 3.08: drawGUI — pass winFlags to imgui.Begin fallback path; was missing NoSavedSettings flag if primary pcall ever failed.
+-- 3.07: Objective 5 — replace hardcoded /nav locyx 204 -243 3 with navLoc(PP.LOC.SLUG, 1500); PP.LOC.SLUG was already defined with the same coords but never used here.
+-- 3.06: waitObjectiveDone — remove dead outer local obj assignment (was immediately shadowed by inner local obj in the log block; never read).
+-- 3.05: getScriptDir() — replace fragile last-PID approach with debug.getinfo(1,"S").source directly; PID grab could silently return wrong folder when multiple Lua scripts running.
+-- 3.04: Fix /rgm -> /rgl in pauseRGMercs/unpauseRGMercs (defunct macro prefix). Add 500ms settle after second /autoinv in doBettyPocketInteraction. Hoist bardSeloActive to module scope (was duplicated inside pppokerMovementBuffPresent and pppokerApplyMovementClassBuff).
 -- 3.03: Invis — removed bogus **Veil of Midnight** (not an EQ spell); BRD songs **Shauri's Sonorous Clouding**, **Selo's Song of Travel** (verify ranks in spellbook). ENC/MAG/WIZ: **Superior Invisibility** where listed. `INVIS_REFRESH_MIN_TICKS_REMAINING` + `INVIS_DURATION_TRACK_EXTRA_NAMES` — refresh before fade (MQ `Me.Buff(name).Duration.Ticks`). Changelog 2.83 note: Veil of Midnight was never valid.
 -- 3.02: Default `INVIS_ITEM_NAMES` — **Cloudy Potion** last (add other clickies above it for earlier tries).
 -- 3.01: Gate **item ladder** — `GATE_ITEM_LADDER` ordered steps (`stein` → `zueria_slide` → `potions`); **skip** stein/philter when on reuse timer (no long wait blocking Slide). Invis **item** ladder: `INVIS_ITEM_LADDER` or `INVIS_ITEM_NAMES` order; skip clicky if not `FindItem` / reuse-ready (`INVIS_SKIP_ITEM_IF_NOT_READY`). Shared `itemClickReuseReady()` for timer checks.
@@ -57,11 +70,11 @@
 -- 2.47: On successful quest completion, log commemorative coin count and Quest Run Time (seconds), matching Poker2.lua end-of-run output.
 -- 2.46: Blightfire (Moors) poker2MountDelayInNekOrMoors — speed buff + mountIfNeeded only (no extra Poker2 pause stack).
 -- 2.45: Qeynos ensureSpeedAndInvisInQeynos — speed, shrink (TRAVEL_SHRINK_IN_QEYNOS), dismount if mounted, invis; then nav to POIs (2.51: navLocNoMount in NQ/SQ, no keyring mount).
--- 2.44: Highpass ensureSpeedShrinkInvisInHighpass — no dismount; speed, shrink, mount, invis (same toggles).
--- 2.42: Highpass ensureSpeedShrinkInvisInHighpass — mountIfNeeded after shrink, invis last; TRAVEL_NO_MOUNT_IN_HIGHPASS to walk only. mountIfNeeded skips Highpass when that toggle true.
+-- 2.44: Highpass ensureSpeedInvisInHighpass — no dismount; speed, shrink, mount, invis (same toggles).
+-- 2.42: Highpass ensureSpeedInvisInHighpass — mountIfNeeded after shrink, invis last; TRAVEL_NO_MOUNT_IN_HIGHPASS to walk only. mountIfNeeded skips Highpass when that toggle true.
 -- 2.41: Guise shrink — at most one /useitem + one shrink popup per Run (resetGuiseShrinkSession); removed duplicate shrink from prepBeforeTasselLeg (preflight only, like zone helpers).
 -- 2.40: Qeynos (NQ/SQ): ensureSpeedAndInvisInQeynos dismounts for speed/invis on foot, then nav (later 2.51: hard no keyring mount in NQ/SQ).
--- 2.39: ensureSpeedShrinkInvisInHighpass — on zone-in/resume in Highpass (obj 8–12): dismount, movement buff, Guise shrink (toggle), invis last via ensureInvisIfNeeded. Mount left to navLoc / navLocNoMount per leg.
+-- 2.39: ensureSpeedInvisInHighpass — on zone-in/resume in Highpass (obj 8–12): dismount, movement buff, Guise shrink (toggle), invis last via ensureInvisIfNeeded. Mount left to navLoc / navLocNoMount per leg.
 -- 2.38: Blightfire/Nektulos Poker2 mount — waitMeNotCasting before keyring mount click and after mount; mountIfNeeded already waits Me.Casting + mounted after /useitem.
 -- 2.37: tryGateToPoK — route by capability: AA waits AltAbilityReady; spell Gate waits SpellReady; potion waits FindItem.Timer (reuse). No AA/spell/potion → return false immediately (caller /travelto) with no long waits.
 -- 2.36: tryGateToPoK — wait for Gate AA ready, retries after collapse/fail (AltAbilityReady + cast clear + longer zone wait); potion path retried. Avoids immediate /travelto pok when Gate was not ready long enough.
@@ -71,7 +84,7 @@
 -- 2.32: Pause Nav toggles gui.navPaused; moving() waits in waitWhileNavPaused (Run continues after unpause). Stop clears navPaused, halts nav/travelto, and sets stopRequested to end Run. Run clears navPaused on start.
 -- 2.31: South Qeynos Lion's Mane (obj 15): no Gate at lion; after that objective done, obj 16 starts with Gate/potion to PoK if still in NQ/SQ, then West Freeport / Slick (same pattern as Tiger / Toadstool).
 -- 2.30: Neriak Toadstool (obj 7): no Gate at painting; after Toadstool objective done, obj 8 starts with Gate/potion to PoK then Highpass (same pattern as Tiger → Qeynos).
--- 2.29: Qeynos (NQ/SQ): ensureSpeedAndInvisInQeynos — speed + invis on foot. Highpass (see 2.39 ensureSpeedShrinkInvisInHighpass): no dismount before hail Quinn/Mhrai; nav without mount on lumber+tiger (obj 10–12); Gate/potion removed from Tiger step — after Tiger objective done, obj 13 runs Gate/travel then NQ. TRAVEL_INVIS_AFTER_QEYNOS_ZONE gates invis inside Qeynos helper.
+-- 2.29: Qeynos (NQ/SQ): ensureSpeedAndInvisInQeynos — speed + invis on foot. Highpass (see 2.39 ensureSpeedInvisInHighpass): no dismount before hail Quinn/Mhrai; nav without mount on lumber+tiger (obj 10–12); Gate/potion removed from Tiger step — after Tiger objective done, obj 13 runs Gate/travel then NQ. TRAVEL_INVIS_AFTER_QEYNOS_ZONE gates invis inside Qeynos helper.
 -- 2.28: Neriak (40/41): on entry/resume — dismount if needed, speed buff + invis (casts if needed); mount keyring never used in Neriak (PP.TRAVEL_NO_MOUNT_IN_NERIAK). Blightfire/Moors (395): on entry — speed buff + mount + Poker2 pause. Removed TRAVEL_NO_MOVEMENT_BUFF_CAST_IN_NERIAK (speed may cast in Neriak on foot).
 -- 2.27: Neriak mount-cast fix via pppokerEnsureMovementBuff — skip class/totem movement buff *application* in Neriak Foreign/Commons (PP.TRAVEL_NO_MOVEMENT_BUFF_CAST_IN_NERIAK). Reverts 2.26 dismount-before-buffs in ensureSpeedAndInvisInNeriak (single rule in movement buff path).
 -- 2.26: Neriak buff pass (ensureSpeedAndInvisInNeriak): dismount before movement/invis if PP.TRAVEL_DISMOUNT_BEFORE_BUFFS_IN_NERIAK (default true) — many spells/items do not cast on mount.
@@ -114,7 +127,7 @@ local ImAnim = require('ImAnim')
 local stopRequested = false
 
 local PP = {
-    VERSION = "3.03",
+    VERSION = "3.16",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -203,8 +216,6 @@ local PP = {
     --- If true (default), each Run: ensure bind is PoK (202) before TaskWnd sync and any travel to Big Slick for acquire.
     ENSURE_POK_BIND_BEFORE_RUN = true,
     MEMENTO_GROG_NAME = "Memento Grog",
-    GUISE_SHRINK_ITEM = "Guise of the Deceiver",
-    GUISE_SHRINK_HEIGHT_MIN = 2.5,
     --- Betty pocket hail radius (Live nav often stops slightly past strict 25).
     EAST_FP_BETTY_HAIL_MAX_DIST = 45,
     --- Zueria Slide (East FP -> Nektulos); `PP.pppokerZueria` + readiness snapshot.
@@ -268,13 +279,15 @@ local PP = {
             "Shauri's Sonorous Clouding",
             "Selo's Song of Travel",
         },
-        DRU = { "Invisibility", "Camouflage" },
+        --- Druids have no standard Invisibility spell. Camouflage line only. Best→fallback: Improved Superior Camo (Lv 48, Improved Invis — won't break on movement), Superior Camo (Lv 18), base Camo (Lv 4). Script uses first one found in spellbook.
+        DRU = { "Improved Superior Camouflage", "Superior Camouflage", "Camouflage" },
         --- Superior Invisibility (verify in spellbook — typically ENC; MAG often base Invisibility only).
         ENC = { "Superior Invisibility", "Invisibility" },
         MAG = { "Invisibility" },
         --- Living invis only (not ITU). Skin of the Shadow (improved invis, ~55+) then Gather Shadows (Lv 7 unstable). Cloak of Shadows AA via INVIS_SELF_AA_NAMES when trained.
         NEC = { "Skin of the Shadow", "Gather Shadows" },
-        RNG = { "Camouflage" },
+        --- Rangers: Superior Camouflage (Lv 47) preferred; base Camouflage (Lv 14) fallback.
+        RNG = { "Superior Camouflage", "Camouflage" },
         SHM = { "Invisibility" },
         WIZ = { "Superior Invisibility", "Improved Invisibility", "Invisibility" },
     },
@@ -284,6 +297,8 @@ local PP = {
         "Invisibility",
         --- Necro (and similar): rank 1+ gives living invis; skipped on other classes (no AA id).
         "Cloak of Shadows",
+        --- DRU/RNG: Alt Act ID 80 per EQ Resource. AltAbility lookup returns 0 for classes without it — exits cleanly.
+        "Innate Camouflage",
     },
     --- Preferred invis AA ids (Live-first). Used before AA-name fallback.
     INVIS_SELF_AA_IDS = {},
@@ -293,6 +308,8 @@ local PP = {
         "Mass Invisibility",
         "Group Perfected Invisibility",
         "Mass Group Invisibility",
+        --- DRU/RNG group camo AA: Alt Act ID 518 per EQ Resource.
+        "Shared Camouflage",
     },
     --- Bard group invis AA: **Alt Act ID 231** per EQ Resource `articles.eqresource.com/altactlist.php` (Bard section lists it as "Shauri's Sonorious Clouding" — site typo; in-game name below).
     INVIS_BRD_AA_IDS = { 231 },
@@ -348,13 +365,9 @@ local PP = {
     TRAVEL_NO_MOUNT_IN_NERIAK = true,
     --- After /travelto into North or South Qeynos, refresh invis before nav to POIs.
     TRAVEL_INVIS_AFTER_QEYNOS_ZONE = true,
-    --- North/South Qeynos: maybeGuiseShrink in ensureSpeedAndInvisInQeynos after speed. Set false to skip.
-    TRAVEL_SHRINK_IN_QEYNOS = true,
-    --- Highpass Hold: Guise shrink on entry/resume (before invis). Set false to skip shrink here.
-    TRAVEL_SHRINK_IN_HIGHPASS = true,
     --- Highpass: invis last via ensureInvisIfNeeded (skips if already up). Set false to skip invis in this helper.
     TRAVEL_INVIS_AFTER_HIGHPASS_ZONE = true,
-    --- true = walk Highpass Hold (no keyring mount). false = mount after shrink, before invis (default).
+    --- true = walk Highpass Hold (no keyring mount). false = mount before invis (default).
     TRAVEL_NO_MOUNT_IN_HIGHPASS = false,
     --- Final hail Big Slick (obj 16): match Poker2 delays + journal time to credit.
     SLICK_FINAL_POST_NAV_MS = 600,
@@ -447,6 +460,18 @@ local gui = {
     debugOpen = false,
     --- Newest lines for the Debug panel (ring buffer, max 120).
     debugLog = {},
+    --- Last buff upkeep tick timestamp (mq.gettime()).
+    lastBuffUpkeepTick = 0,
+    --- RGMercs pause state — true if pause was sent this Run.
+    rgmercPaused = false,
+    --- TaskWnd open_once_no_fetch mode — opened this session.
+    journalOpenedOnce = false,
+    --- Progress bar live options (built once from statusBarGlobalOpts + PP overrides).
+    barLiveOpts = nil,
+    --- Objective bar shimmer state keyed by label.
+    shimmerState = {},
+    --- Commemorative coin icon texture (loaded once).
+    commIconTex = nil,
 }
 
 -- Status bar options (same style defaults used in init.lua).
@@ -603,23 +628,11 @@ for _ = 1, 3 do
 end
 
 local function getScriptDir()
-    local dir = nil
-    pcall(function()
-        mq.delay(0)
-        local lastPID = mq.TLO.Lua.PIDs():match("(%d+)$")
-        local scriptFolder = mq.TLO.Lua.Script(lastPID).Name()
-        if scriptFolder and scriptFolder ~= "" then
-            dir = string.format("%s/%s", mq.luaDir, scriptFolder):gsub("\\", "/")
-        end
-    end)
-    if not dir then
-        local source = debug.getinfo(1, "S").source
-        if source:sub(1, 1) == "@" then
-            source = source:sub(2)
-        end
-        dir = (source:match("^(.*)[/\\].-$") or "."):gsub("\\", "/")
+    local source = debug.getinfo(1, "S").source
+    if source:sub(1, 1) == "@" then
+        source = source:sub(2)
     end
-    return dir
+    return (source:match("^(.*)[/\\].-$") or "."):gsub("\\", "/")
 end
 
 local function loadTextures()
@@ -919,14 +932,11 @@ local function sbShallowCopy(orig)
     return copy
 end
 
---- Per-bar shimmer phase (follows fill direction); keyed by ImGui bar id string.
-local objectiveBarShimmerState = {}
-
 local function sbGetObjectiveBarState(label, now)
-    local state = objectiveBarShimmerState[label]
+    local state = gui.shimmerState[label]
     if not state then
         state = { lastP = 0.0, dir = 1, t0 = now }
-        objectiveBarShimmerState[label] = state
+        gui.shimmerState[label] = state
     end
     return state
 end
@@ -1075,14 +1085,13 @@ local function drawObjectiveBar(label, percent, lowCol, highCol, opts)
     return progress
 end
 
-local barLiveOpts = nil
 local function ensureObjectiveBarLive()
-    if barLiveOpts then return barLiveOpts end
-    barLiveOpts = sbShallowCopy(statusBarGlobalOpts)
+    if gui.barLiveOpts then return gui.barLiveOpts end
+    gui.barLiveOpts = sbShallowCopy(statusBarGlobalOpts)
     for k, v in pairs(PP.PIC_TEST_BAR_OPTS) do
-        barLiveOpts[k] = v
+        gui.barLiveOpts[k] = v
     end
-    return barLiveOpts
+    return gui.barLiveOpts
 end
 
 local function pushDebugLine(msg, alsoPrint)
@@ -1145,19 +1154,18 @@ local function getCommemorativeCount()
     return 0
 end
 
-local commemorativeIconTex = nil
 local function drawCommemorativeCoinsRow()
     local cnt = getCommemorativeCount()
     local green = getImVec4(0.15, 0.92, 0.38, 1.0)
     pcall(function()
-        if commemorativeIconTex == nil and mq.FindTextureAnimation then
+        if gui.commIconTex == nil and mq.FindTextureAnimation then
             local okT, tex = pcall(mq.FindTextureAnimation, "A_DragItem")
-            if okT and tex then commemorativeIconTex = tex end
+            if okT and tex then gui.commIconTex = tex end
         end
-        if commemorativeIconTex and commemorativeIconTex.SetTextureCell and imgui.DrawTextureAnimation then
+        if gui.commIconTex and gui.commIconTex.SetTextureCell and imgui.DrawTextureAnimation then
             local cell = PP.COMMEMORATIVE_ITEM_ICON_ID - PP.DRAGITEM_ICON_ATLAS_OFFSET
-            commemorativeIconTex:SetTextureCell(cell)
-            imgui.DrawTextureAnimation(commemorativeIconTex, 22, 22)
+            gui.commIconTex:SetTextureCell(cell)
+            imgui.DrawTextureAnimation(gui.commIconTex, 22, 22)
             if imgui.SameLine then imgui.SameLine() end
         end
     end)
@@ -1289,11 +1297,11 @@ end
 
 local function waitForZoneOrFalse(zoneId, timeoutMs)
     timeoutMs = timeoutMs or 120000
-    local start = os.time()
+    local t0 = mq.gettime()
     while mq.TLO.Zone.ID() ~= zoneId do
         shouldStop()
         mq.delay(500)
-        if (os.time() - start) * 1000 > timeoutMs then
+        if mq.gettime() - t0 > timeoutMs then
             return false
         end
     end
@@ -1308,82 +1316,38 @@ end
 
 --- MQ2Nav: prefer ${Navigation.Active} when present (do not OR with Nav — stale Nav.Active can stuck moving()).
 local function navigationIsActive()
-    local function truthyActive(v)
-        if v == nil then return false end
-        if type(v) == "boolean" then return v end
-        if type(v) == "number" then return v ~= 0 end
-        if type(v) == "string" then
-            local s = tostring(v):lower():gsub("^%s+", ""):gsub("%s+$", "")
-            if s == "" or s == "false" or s == "0" or s == "off" or s == "no" or s == "inactive" or s == "idle" or s == "stopped" or s == "done" or s == "nil" or s == "null" then
-                return false
-            end
-            if s == "true" or s == "1" or s == "on" or s == "yes" or s == "active" or s == "running" then
-                return true
-            end
-            return false
-        end
-        return false
-    end
-    local function readActive(tlo)
-        if not tlo or not tlo.Active then return false end
-        local a = tlo.Active
-        local ok, v = pcall(function()
-            if type(a) == "function" then return a() end
-            return a
-        end)
-        if not ok then return false end
-        return truthyActive(v)
-    end
-    local ok, active = pcall(function()
-        if mq.TLO.Navigation then
-            return readActive(mq.TLO.Navigation)
-        end
-        if mq.TLO.Nav then
-            return readActive(mq.TLO.Nav)
-        end
-        return false
+    local ok, v = pcall(function()
+        local nav = mq.TLO.Navigation or mq.TLO.Nav
+        if not nav or not nav.Active then return false end
+        local a = nav.Active
+        return type(a) == "function" and a() or a
     end)
-    return ok and active == true
+    if not ok or v == nil then return false end
+    if type(v) == "boolean" then return v end
+    if type(v) == "number" then return v ~= 0 end
+    if type(v) == "string" then
+        local s = v:lower():match("^%s*(.-)%s*$")
+        return s == "true" or s == "1" or s == "on" or s == "yes" or s == "active" or s == "running"
+    end
+    return false
 end
 
 --- MQ2Nav: true while path is paused (/nav pause) — path kept; Active may be false while Paused is true.
 local function navigationIsPaused()
-    local function truthyPaused(v)
-        if v == nil then return false end
-        if type(v) == "boolean" then return v end
-        if type(v) == "number" then return v ~= 0 end
-        if type(v) == "string" then
-            local s = tostring(v):lower():gsub("^%s+", ""):gsub("%s+$", "")
-            if s == "" or s == "false" or s == "0" or s == "off" or s == "no" or s == "nil" or s == "null" then
-                return false
-            end
-            if s == "true" or s == "1" or s == "on" or s == "yes" or s == "paused" or s:find("pause", 1, true) then
-                return true
-            end
-            return false
-        end
-        return false
-    end
-    local function readPaused(tlo)
-        if not tlo or not tlo.Paused then return false end
-        local p = tlo.Paused
-        local ok, v = pcall(function()
-            if type(p) == "function" then return p() end
-            return p
-        end)
-        if not ok then return false end
-        return truthyPaused(v)
-    end
-    local ok, paused = pcall(function()
-        if mq.TLO.Navigation then
-            return readPaused(mq.TLO.Navigation)
-        end
-        if mq.TLO.Nav then
-            return readPaused(mq.TLO.Nav)
-        end
-        return false
+    local ok, v = pcall(function()
+        local nav = mq.TLO.Navigation or mq.TLO.Nav
+        if not nav or not nav.Paused then return false end
+        local p = nav.Paused
+        return type(p) == "function" and p() or p
     end)
-    return ok and paused == true
+    if not ok or v == nil then return false end
+    if type(v) == "boolean" then return v end
+    if type(v) == "number" then return v ~= 0 end
+    if type(v) == "string" then
+        local s = v:lower():match("^%s*(.-)%s*$")
+        return s == "true" or s == "1" or s == "on" or s == "yes" or s:find("pause", 1, true) ~= nil
+    end
+    return false
 end
 
 local function navPluginPause()
@@ -1710,32 +1674,33 @@ local function meditateToManaPpp(requiredMana)
     mq.cmd("/stand")
 end
 
+local function bardSeloActive()
+    for i = 1, 30 do
+        local s = mq.TLO.Me.Song(i).Name()
+        if s and s ~= "" then
+            local sl = s:lower()
+            if sl:find("selo", 1, true) or sl:find("movement speed", 1, true) then
+                return s
+            end
+        end
+    end
+    for i = 1, 40 do
+        local b = mq.TLO.Me.Buff(i).Name()
+        if b and b ~= "" then
+            local bl = b:lower()
+            if bl:find("selo", 1, true) or bl:find("movement speed", 1, true) then
+                return b
+            end
+        end
+    end
+    return nil
+end
+
 local function pppokerMovementBuffPresent()
     local class = mq.TLO.Me.Class.ShortName()
     local list = PP.MOVEMENT_CLASS_BUFFS[class]
     if list then
         if class == "BRD" then
-            local function bardSeloActive()
-                for i = 1, 30 do
-                    local s = mq.TLO.Me.Song(i).Name()
-                    if s and s ~= "" then
-                        local sl = s:lower()
-                        if sl:find("selo", 1, true) or sl:find("movement speed", 1, true) then
-                            return s
-                        end
-                    end
-                end
-                for i = 1, 40 do
-                    local b = mq.TLO.Me.Buff(i).Name()
-                    if b and b ~= "" then
-                        local bl = b:lower()
-                        if bl:find("selo", 1, true) or bl:find("movement speed", 1, true) then
-                            return b
-                        end
-                    end
-                end
-                return nil
-            end
             local which = bardSeloActive()
             if which then return true, which end
         end
@@ -1869,28 +1834,6 @@ local function pppokerApplyMovementClassBuff()
     local class = mq.TLO.Me.Class.ShortName()
     local list = PP.MOVEMENT_CLASS_BUFFS[class]
     if not list then return false end
-    local function bardSeloActive()
-        if class ~= "BRD" then return nil end
-        for i = 1, 30 do
-            local s = mq.TLO.Me.Song(i).Name()
-            if s and s ~= "" then
-                local sl = s:lower()
-                if sl:find("selo", 1, true) or sl:find("movement speed", 1, true) then
-                    return s
-                end
-            end
-        end
-        for i = 1, 40 do
-            local b = mq.TLO.Me.Buff(i).Name()
-            if b and b ~= "" then
-                local bl = b:lower()
-                if bl:find("selo", 1, true) or bl:find("movement speed", 1, true) then
-                    return b
-                end
-            end
-        end
-        return nil
-    end
     for _, spell in ipairs(list) do
         local spellData = mq.TLO.Spell(spell)
         if spellData and spellData.ID() and tonumber(spellData.ID() or 0) > 0 then
@@ -2490,7 +2433,6 @@ local function ensureInvisIfNeeded(label)
     return true
 end
 
-local lastBuffUpkeepTick = 0
 runBuffUpkeepTick = function(contextLabel)
     if PP.BUFF_UPKEEP_ENABLED == false then
         return
@@ -2500,10 +2442,10 @@ runBuffUpkeepTick = function(contextLabel)
     end
     local now = mq.gettime()
     local everyMs = tonumber(PP.BUFF_UPKEEP_CHECK_MS) or 1200
-    if now - lastBuffUpkeepTick < everyMs then
+    if now - gui.lastBuffUpkeepTick < everyMs then
         return
     end
-    lastBuffUpkeepTick = now
+    gui.lastBuffUpkeepTick = now
     local navMoving = navigationIsActive() or navigationIsPaused() or gui.navPaused
     local meCasting = false
     pcall(function()
@@ -2531,37 +2473,7 @@ runBuffUpkeepTick = function(contextLabel)
     end
 end
 
---- One Guise click per Run; one shrink /popup per Run (reset at runQuest start).
-local guiseShrinkUsedThisRun = false
-local guiseShrinkPopupShownThisRun = false
-
-local function resetGuiseShrinkSession()
-    guiseShrinkUsedThisRun = false
-    guiseShrinkPopupShownThisRun = false
-end
-
-local function maybeGuiseShrink(contextLabel)
-    if guiseShrinkUsedThisRun then
-        return
-    end
-    local item = PP.GUISE_SHRINK_ITEM or "Guise of the Deceiver"
-    if not hasItem(item) then return end
-    local ok, h = pcall(function() return mq.TLO.Me.Height() end)
-    h = (ok and tonumber(h or 0)) or 0
-    local minH = tonumber(PP.GUISE_SHRINK_HEIGHT_MIN) or 2.5
-    if h <= minH then return end
-    guiseShrinkUsedThisRun = true
-    info("shrink (" .. tostring(contextLabel) .. ") - " .. item)
-    mq.cmdf('/useitem "%s"', item)
-    mq.delay(8500)
-    if not guiseShrinkPopupShownThisRun then
-        guiseShrinkPopupShownThisRun = true
-        pcall(function()
-            mq.cmd("/popup You are a bit tall, lets shrink a little to make it easier")
-        end)
-    end
-end
-
+--- Speed buff + optional invis before navigating to Tassel painting.
 local function prepBeforeTasselLeg()
     pppokerEnsureMovementBuff()
     if PP.TRAVEL_INVIS_BEFORE_TASSEL then
@@ -2875,16 +2787,7 @@ end
 
 --- Stein, philters, or Zueria Slide item+level — any enables the Gate item phase.
 local function hasAnyGateItemPath()
-    if hasGateStein() then
-        return true
-    end
-    if hasGatePotion() then
-        return true
-    end
-    if hasZueriaSlideForGateLadder() then
-        return true
-    end
-    return false
+    return hasGateStein() or hasGatePotion() or hasZueriaSlideForGateLadder()
 end
 
 local function gateAltAbilityReady()
@@ -2901,76 +2804,36 @@ local function gateSpellReady()
     return ok and r
 end
 
---- Alias: gate philters / stein use same reuse check as `itemClickReuseReady`.
-local function gatePotionReady(potionName)
-    return itemClickReuseReady(potionName)
-end
-
---- After collapse or failed zone, Gate AA is on cooldown — poll until ready or timeout.
-local function waitUntilGateAltReady(maxMs)
+--- Poll until checkFn() returns true, already in gate zone, or timeout. Shared by AA, spell, and item waits.
+local function waitUntilGateReady(checkFn, label, maxMs)
     maxMs = maxMs or (PP.GATE_WAIT_READY_MS or 240000)
     local poll = PP.GATE_READY_POLL_MS or 250
     local t0 = mq.gettime()
-    if gateAltAbilityReady() then
-        return true
-    end
-    info("waiting for Gate AA to become ready again (collapse/cooldown)...")
+    if checkFn() then return true end
+    info(label)
     while mq.gettime() - t0 < maxMs do
         shouldStop()
-        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
-            return true
-        end
-        if gateAltAbilityReady() then
-            return true
-        end
+        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then return true end
+        if checkFn() then return true end
         mq.delay(poll)
     end
-    return gateAltAbilityReady()
-end
-
-local function waitUntilGateSpellReady(maxMs)
-    maxMs = maxMs or (PP.GATE_WAIT_READY_MS or 240000)
-    local poll = PP.GATE_READY_POLL_MS or 250
-    local t0 = mq.gettime()
-    if gateSpellReady() then
-        return true
-    end
-    info("waiting for Gate spell to be ready (gem/recast)...")
-    while mq.gettime() - t0 < maxMs do
-        shouldStop()
-        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
-            return true
-        end
-        if gateSpellReady() then
-            return true
-        end
-        mq.delay(poll)
-    end
-    return gateSpellReady()
+    return checkFn()
 end
 
 local function waitUntilGatePotionReady(potionName, maxMs)
     maxMs = maxMs or (PP.GATE_WAIT_READY_MS or 240000)
     local poll = PP.GATE_READY_POLL_MS or 250
     local t0 = mq.gettime()
-    if gatePotionReady(potionName) then
-        return true
-    end
+    if itemClickReuseReady(potionName) then return true end
     info("waiting for gate potion item timer (reuse)...")
     while mq.gettime() - t0 < maxMs do
         shouldStop()
-        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
-            return true
-        end
-        if not mq.TLO.FindItem(potionName)() then
-            return false
-        end
-        if gatePotionReady(potionName) then
-            return true
-        end
+        if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then return true end
+        if not mq.TLO.FindItem(potionName)() then return false end
+        if itemClickReuseReady(potionName) then return true end
         mq.delay(poll)
     end
-    return gatePotionReady(potionName)
+    return itemClickReuseReady(potionName)
 end
 
 local function waitCastClearOrZoned(targetZoneId, maxMs)
@@ -3151,7 +3014,7 @@ local function tryGateToPoK_AAorSpellOnly()
                 return true
             end
             if not gateAltAbilityReady() then
-                if not waitUntilGateAltReady(waitReadyMs) then
+                if not waitUntilGateReady(gateAltAbilityReady, "waiting for Gate AA to become ready again (collapse/cooldown)...", waitReadyMs) then
                     warn("Gate AA did not become ready in time — skipping AA.")
                     break
                 end
@@ -3184,7 +3047,7 @@ local function tryGateToPoK_AAorSpellOnly()
                 return true
             end
             if not gateSpellReady() then
-                if not waitUntilGateSpellReady(waitReadyMs) then
+                if not waitUntilGateReady(gateSpellReady, "waiting for Gate spell to be ready (gem/recast)...", waitReadyMs) then
                     warn("Gate spell did not become ready in time — skipping spell.")
                     break
                 end
@@ -3329,7 +3192,7 @@ local function tryGateToPoK()
                 return true
             end
             if not gateAltAbilityReady() then
-                if not waitUntilGateAltReady(waitReadyMs) then
+                if not waitUntilGateReady(gateAltAbilityReady, "waiting for Gate AA to become ready again (collapse/cooldown)...", waitReadyMs) then
                     warn("Gate AA did not become ready in time — trying spell or items if available.")
                     break
                 end
@@ -3370,7 +3233,7 @@ local function tryGateToPoK()
                 return true
             end
             if not gateSpellReady() then
-                if not waitUntilGateSpellReady(waitReadyMs) then
+                if not waitUntilGateReady(gateSpellReady, "waiting for Gate spell to be ready (gem/recast)...", waitReadyMs) then
                     warn("Gate spell did not become ready in time — trying items if available.")
                     break
                 end
@@ -3457,9 +3320,9 @@ local function tryGateDirectOrPokFallback(directTravelArg, directZoneId, directL
     return tryGateToPoKOrTraveltoPok()
 end
 
---- After Run passes journal checks: speed, mount, Zueria snapshot, Guise shrink (once per Run). No invis here — apply invis in prepBeforeTasselLeg / zone helpers.
+--- After Run passes journal checks: speed, mount, Zueria snapshot, AutoSize self 3. No invis here — apply invis in prepBeforeTasselLeg / zone helpers.
 local function runPreflightAfterQuestChecks()
-    debugLogQuiet("preflight - speed, mount, Zueria Slide check, Guise shrink (no invis; invis last per leg).")
+    debugLogQuiet("preflight - speed, mount, Zueria Slide check, MQ2AutoSize self 3 (no invis; invis last per leg).")
     pppokerEnsureMovementBuff()
     mountIfNeeded()
     if PP.pppokerZueria and PP.pppokerZueria.refreshReadiness then
@@ -3468,7 +3331,14 @@ local function runPreflightAfterQuestChecks()
             info(zs.summary)
         end
     end
-    maybeGuiseShrink("preflight")
+    local ok, loaded = pcall(function() return mq.TLO.Plugin("MQ2AutoSize").IsLoaded() end)
+    if not (ok and loaded) then
+        info("Loading MQ2AutoSize...")
+        mq.cmd("/plugin MQ2AutoSize")
+        mq.delay(500)
+    end
+    -- Set a consistent self model size for the run. Mount size left to your AutoSize config.
+    mq.cmd("/autosize self 3")
 end
 
 --- Movement + invis once we are in Neriak Foreign or Commons (zoned in or resumed already there). Dismount first so speed/invis cast on foot; mount keyring not used in Neriak (see mountIfNeeded).
@@ -3487,22 +3357,18 @@ local function ensureSpeedAndInvisInNeriak(contextLabel)
     end
 end
 
---- North / South Qeynos: speed buff, shrink (toggle), dismount if mounted, invis last. Navigation: navLocNoMount only (no keyring mount in NQ/SQ).
+--- North / South Qeynos: speed buff, dismount if mounted, invis last. Navigation: navLocNoMount only (no keyring mount in NQ/SQ).
 local function ensureSpeedAndInvisInQeynos(contextLabel)
     local z = mq.TLO.Zone.ID()
     if z ~= PP.ZONE.NQ and z ~= PP.ZONE.SQ then
         return
     end
     contextLabel = contextLabel or "Qeynos"
-    debugLogQuiet(string.format("%s - speed, shrink, dismount if needed, invis (Qeynos zone %d).", contextLabel, z))
+    debugLogQuiet(string.format("%s - speed, dismount if needed, invis (Qeynos zone %d).", contextLabel, z))
     mq.delay(400)
     waitMeNotCasting(30000)
     pppokerEnsureMovementBuff()
     waitMeNotCasting(30000)
-    if PP.TRAVEL_SHRINK_IN_QEYNOS ~= false then
-        maybeGuiseShrink(contextLabel)
-        waitMeNotCasting(30000)
-    end
     dismountIfMounted("Qeynos invis (on foot)")
     mq.delay(400)
     waitMeNotCasting(30000)
@@ -3511,23 +3377,19 @@ local function ensureSpeedAndInvisInQeynos(contextLabel)
     end
 end
 
---- Highpass Hold: speed buff, shrink, mount (if enabled), invis last — no dismount in this helper.
+--- Highpass Hold: speed buff, mount (if enabled), invis last — no dismount in this helper.
 --- navLoc / navLocNoMount still run after; navLocNoMount skips mount for lumber/tiger legs.
-local function ensureSpeedShrinkInvisInHighpass(contextLabel)
+local function ensureSpeedInvisInHighpass(contextLabel)
     local z = mq.TLO.Zone.ID()
     if z ~= PP.ZONE.HIGHPASS then
         return
     end
     contextLabel = contextLabel or "Highpass"
-    debugLogQuiet(string.format("%s - speed, shrink, mount, invis (Highpass zone %d).", contextLabel, z))
+    debugLogQuiet(string.format("%s - speed, mount, invis (Highpass zone %d).", contextLabel, z))
     mq.delay(400)
     waitMeNotCasting(30000)
     pppokerEnsureMovementBuff()
     waitMeNotCasting(30000)
-    if PP.TRAVEL_SHRINK_IN_HIGHPASS ~= false then
-        maybeGuiseShrink(contextLabel)
-        waitMeNotCasting(30000)
-    end
     if PP.TRAVEL_NO_MOUNT_IN_HIGHPASS ~= true then
         mountIfNeeded()
         waitMeNotCasting(30000)
@@ -3628,6 +3490,7 @@ local function doBettyPocketInteraction()
     mq.cmd("/autoinv")
     mq.delay(500)
     mq.cmd("/autoinv")
+    mq.delay(500)
     mq.cmd("/target ${Me.Name}")
     local grog = PP.MEMENTO_GROG_NAME or "Memento Grog"
     while mq.TLO.FindItem(grog)() do
@@ -3771,17 +3634,36 @@ local function unpauseCWTNPlugins()
     PP.cwtnState.pausedApplied = false
 end
 
-local rgmercState = { pausedApplied = false }
 local function pauseRGMercs()
     local ok, status = pcall(function() return mq.TLO.Lua.Script('rgmercs').Status() end)
     if ok and status == 'RUNNING' then
-        mq.cmd('/rgm pauseall')
-        rgmercState.pausedApplied = true
+        mq.cmd('/rgl pause')
+        gui.rgmercPaused = true
     end
 end
 local function unpauseRGMercs()
-    if rgmercState.pausedApplied then mq.cmd('/rgm unpauseall') end
-    rgmercState.pausedApplied = false
+    if gui.rgmercPaused then mq.cmd('/rgl unpause') end
+    gui.rgmercPaused = false
+end
+
+-- True if MQ2AutoSize was already loaded when the script started — we leave it alone on cleanup.
+local autosizePreloaded = (function()
+    local ok, v = pcall(function() return mq.TLO.Plugin("MQ2AutoSize").IsLoaded() end)
+    return ok and v == true
+end)()
+
+--- Unpause RGMercs + CWTN, and unload MQ2AutoSize if we were the ones who loaded it.
+--- Safe to call on normal completion, early exit, user stop, or error.
+local function cleanupAfterRun()
+    unpauseRGMercs()
+    unpauseCWTNPlugins()
+    if not autosizePreloaded then
+        local ok, loaded = pcall(function() return mq.TLO.Plugin("MQ2AutoSize").IsLoaded() end)
+        if ok and loaded then
+            info("Unloading MQ2AutoSize (loaded by PPPoker this run).")
+            mq.cmd("/plugin MQ2AutoSize unload")
+        end
+    end
 end
 
 --- Same as init.lua: journal fields via mq.parse match /echo; Lua Task.Objective userdata can disagree.
@@ -3816,9 +3698,6 @@ end
 -- Quest progress: mq.TLO.Task. Journal prime uses mq.delay — ONLY call from script main thread (while gui.open), never from ImGui draw.
 -- Completion signal: objectiveIsComplete (Done() then Status()). Indices: /lua parse mq.TLO.Task("Paintings Playing Poker").Objective(N).Status()
 
-local taskJournalSyncState = {
-    openedOnce = false,
-}
 
 local function journalSyncMode()
     local m = tostring(PP.TASK_JOURNAL_SYNC_MODE or "legacy_full"):lower()
@@ -3831,12 +3710,12 @@ end
 --- Every Run: full sync so resume sees current journal (repeatable).
 local function syncTaskJournalWindowFull()
     if journalSyncMode() == "open_once_no_fetch" then
-        if not taskJournalSyncState.openedOnce then
+        if not gui.journalOpenedOnce then
             pcall(function()
                 mq.cmd("/windowstate TaskWnd open")
             end)
             mq.delay(200)
-            taskJournalSyncState.openedOnce = true
+            gui.journalOpenedOnce = true
             debugLogQuiet("TaskWnd: open_once_no_fetch — opened once; no fetch/close loop.")
         end
         return
@@ -3858,7 +3737,7 @@ end
 --- Update Task TLO without flashing the journal window (many Live builds). If getTask() still empty, set PP.TASK_JOURNAL_FIRST_SYNC = "full".
 local function syncTaskJournalMinimal()
     if journalSyncMode() == "open_once_no_fetch" then
-        if not taskJournalSyncState.openedOnce then
+        if not gui.journalOpenedOnce then
             syncTaskJournalWindowFull()
         end
         return
@@ -4108,7 +3987,6 @@ local function waitObjectiveDone(taskName, idx, timeoutMs)
         if t and objectiveSlotComplete(t, idx) then
             return true
         end
-        local obj = (t and t()) and t.Objective(idx) or nil
         if mq.gettime() >= nextLog then
             local instr = ""
             local t2 = getTask()
@@ -4394,9 +4272,7 @@ local function runObjectiveStep(idx, task)
     elseif idx == 5 then
         ensureZone(PP.ZONE.NERIAK_A, "neriaka", "Neriak Foreign Quarter")
         ensureSpeedAndInvisInNeriak("objective 5 (Slug's Tavern)")
-        mq.cmd('/squelch /nav locyx 204 -243 3')
-        moving()
-        mq.delay(1500)
+        navLoc(PP.LOC.SLUG, 1500)
     elseif idx == 6 then
         ensureZone(PP.ZONE.NERIAK_B, "neriakb", "Neriak Commons", 360000)
         ensureSpeedAndInvisInNeriak("objective 6 (Blind Fish)")
@@ -4419,12 +4295,12 @@ local function runObjectiveStep(idx, task)
             ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
         end
         mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
-        ensureSpeedShrinkInvisInHighpass("objective 8 (Highpass)")
+        ensureSpeedInvisInHighpass("objective 8 (Highpass)")
         navLoc(PP.LOC.QUINN, 1000)
     elseif idx == 9 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
         mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
-        ensureSpeedShrinkInvisInHighpass("objective 9 (Highpass - Quinn)")
+        ensureSpeedInvisInHighpass("objective 9 (Highpass - Quinn)")
         navLoc(PP.LOC.QUINN, 800)
         targetOrFail(PP.NPC.QUINN, "Could not target Quinn", 12000, true)
         mq.cmd('/keypress hail')
@@ -4433,14 +4309,14 @@ local function runObjectiveStep(idx, task)
     elseif idx == 10 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
         mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
-        ensureSpeedShrinkInvisInHighpass("objective 10 (Highpass - lumber)")
+        ensureSpeedInvisInHighpass("objective 10 (Highpass - lumber)")
         navLocNoMount(PP.LOC.LUMBER_1, 900)
         navLocNoMount(PP.LOC.LUMBER_2, 900)
         navLocNoMount(PP.LOC.LUMBER_3, 1000)
     elseif idx == 11 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
         mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
-        ensureSpeedShrinkInvisInHighpass("objective 11 (Highpass - Mhrai)")
+        ensureSpeedInvisInHighpass("objective 11 (Highpass - Mhrai)")
         navLocNoMount(PP.LOC.LUMBER_3, 900)
         targetOrFail(PP.NPC.MHRAI, "Could not target Mhrai", 12000, true)
         mq.cmd('/keypress hail')
@@ -4449,7 +4325,7 @@ local function runObjectiveStep(idx, task)
     elseif idx == 12 then
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
         mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
-        ensureSpeedShrinkInvisInHighpass("objective 12 (Highpass - tiger)")
+        ensureSpeedInvisInHighpass("objective 12 (Highpass - tiger)")
         navLocNoMount(PP.LOC.TIGER, tonumber(PP.TIGER_NAV_SETTLE_MS) or 1200)
         local maxD = tonumber(PP.TIGER_NAV_RETRY_IF_DIST_GT) or 22
         if distanceMeToLocYXZ(PP.LOC.TIGER) > maxD then
@@ -4518,7 +4394,7 @@ local function runObjectiveStep(idx, task)
 end
 
 --- After /say at Slick: fetch-only first (fewer TaskWnd flashes); full open/fetch/close only if getTask still nil.
-function syncJournalAfterKeywordTry()
+local function syncJournalAfterKeywordTry()
     syncTaskJournalMinimal()
     mq.delay(400)
     if getTask() then return end
@@ -4527,7 +4403,7 @@ function syncJournalAfterKeywordTry()
 end
 
 --- No Paintings task: zone, nav to Slick, wait in range, /say PP.SLICK_QUEST_KEYWORD, esc, journal sync. Caller re-calls getTask().
-function tryAcquireQuestFromBigSlick()
+local function tryAcquireQuestFromBigSlick()
     if not PP.TRY_BIG_SLICK_QUEST_ACQUIRE then return end
     shouldStop()
     info("No Paintings task in journal - traveling to Big Slick to acquire quest.")
@@ -4577,8 +4453,7 @@ end
 
 --- Main automation: first incomplete objective → runObjectiveStep → waitObjectiveDone (objectiveIsComplete). Same data as getQuestProgress / GUI bar.
 function runQuest()
-    resetGuiseShrinkSession()
-    taskJournalSyncState.openedOnce = false
+    gui.journalOpenedOnce = false
     local questRunStartTime = os.time()
     mq.cmd(string.format('/popup Starting: Paintings Playing Poker v%s', PP.VERSION))
     pauseCWTNPlugins()
@@ -4651,15 +4526,13 @@ function runQuest()
         runBuffUpkeepTick("run loop")
         task = getTask()
         if not task then
-            unpauseRGMercs()
-            unpauseCWTNPlugins()
+            cleanupAfterRun()
             gui.status = "Task became unavailable - stopping."
             warn(gui.status)
             return
         end
         if not taskHasAnyObjectiveRow(task) then
-            unpauseRGMercs()
-            unpauseCWTNPlugins()
+            cleanupAfterRun()
             gui.status = "Get Quest from Big Slick - objectives not visible; open journal or re-hail."
             warn(gui.status)
             return
@@ -4702,8 +4575,7 @@ function runQuest()
         info(string.format("\aoQuest Run Time... \ay%s\ax", formatQuestRunDuration(os.time() - questRunStartTime)))
     end
 
-    unpauseRGMercs()
-    unpauseCWTNPlugins()
+    cleanupAfterRun()
 
     local ar = tonumber(PP.AUTO_REPEAT_DELAY_SEC)
     if ar and ar > 0 then
@@ -4861,7 +4733,7 @@ function drawGUI()
         return imgui.Begin(string.format("PPPoker v%s###PPPokerV2", PP.VERSION), gui.open, winFlags)
     end)
     if not okBegin then
-        open, draw = imgui.Begin(string.format("PPPoker v%s###PPPokerV2", PP.VERSION), gui.open)
+        open, draw = imgui.Begin(string.format("PPPoker v%s###PPPokerV2", PP.VERSION), gui.open, winFlags)
     end
     gui.open = open
     if not open then
@@ -5003,6 +4875,7 @@ while gui.open do
         gui.running = false
         local ok, err = pcall(runQuest)
         if not ok then
+            cleanupAfterRun()
             local em = tostring(err)
             if em:find("Stopped by user", 1, true) then
                 gui.status = "Stopped by user."
