@@ -2,8 +2,18 @@
 -- Created by: RedFrog
 -- Original creation date: 03/18/2026
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
--- Version: 3.16
+-- Version controlled by PP.VERSION (single source of truth — drives window title and run popup).
 -- Changelog:
+-- 3.26: Unified buff application block in runBuffUpkeepTick. Worn Totem and invis are now both fixed for navigation: compute needMovement + needInvis upfront, then one combined nav-pause block (/nav pause + 200ms) when either is needed, apply movement first then invis (both with allowSpellCast=true since nav is paused), single /nav pause off afterward. invisApplyingNow renamed buffsApplyingNow to reflect it guards both. INVIS_REFRESH_MIN_TICKS_REMAINING default changed from 0 to 8 (48s proactive refresh) — script now proactively recasts invis before it expires rather than only reacting after it drops.
+-- 3.25: Fix invis-not-recast and no-50%-med during navigation. Root cause: allowSpellCast=false during navMoving blocked pppokerApplyInvisClassBuff entirely — so pppokerEnsureInvisBuff returned without casting, and meditateToManaPpp (inside the spell path) was never reached. Fix: upkeep invis section now pauses nav (/nav pause + 200ms), applies invis with allowSpellCast=true so spell+med path is reachable, then resumes nav (/nav pause off). invisApplyingNow guard prevents upkeep re-entry while the cast is in progress (cast can take several seconds). meditateToManaPpp MaxMana read wrapped in pcall for safety. removeLevitationBuffsIfPresent() called in both needInvis and !needInvis paths.
+-- 3.24: Med safety buffer + death respawn. meditateToManaPpp now meds to max(requiredMana, 50% of MaxMana) instead of just requiredMana — avoids repeated sit/stand for each subsequent cast (invis refresh, re-gate) during a run leg; log shows need/have/target. handleDeathIfNeeded(): detects Me.State=="DEAD", waits for RespawnWnd, clicks RSPB_STANDARD (bind point), waits until no longer dead + 2s settle, returns true. Wired into runBuffUpkeepTick (fires every 300ms during navigation and objective waits); returns early after respawn so buff checks run clean on the next tick. shouldStop() honored inside all wait loops.
+-- 3.23: Upkeep invis-before-movement guard. runBuffUpkeepTick now reads invis state before the movement buff check. If invis is currently up and movement buff expired, movement re-application is skipped — clicking a movement item (Worn Totem, etc.) or casting a movement spell always drops invis in EQ. Character stays hidden; movement is re-applied on the next tick after invis naturally drops (which then fires the normal movement-first, invis-last sequence). Zone-entry helpers (ensureSpeedAndInvisInNeriak, Qeynos, Highpass) are unaffected — they explicitly apply movement before invis and are not in the upkeep path.
+-- 3.22: Two latent fixes from code review. (1) warn forward decl — loadTextures referenced warn before its local definition; added local warn to forward-decl block and changed local function warn to assignment so it shares the same upvalue. Without this, any atlas/texture load failure would call nil and crash (never triggered because textures load cleanly, but the bug was real). (2) paintingsTaskSlot cache — getPaintingsTaskSlotNumber scanned up to 30 tasks on every objectiveCompleteFromParse call, which is called 16x per progress refresh (up to 480 TLO reads). Cache set on first successful scan, reset at runQuest start in case task was dropped/re-acquired between runs.
+-- 3.21: Gate spell mana check — meditateToManaPpp(gateSpellMana) added before each /cast attempt in both tryGateToPoK_AAorSpellOnly() and tryGateToPoK(). Mana cost read once via mq.TLO.Spell(spellName).Mana() before the loop (math.max 40 floor, same pattern as movement/invis buff functions). Gate AA path unchanged — AAs do not use mana. Fixes low-level casters silently failing Gate casts after spending mana on invis.
+-- 3.20: Gate retry — gem-ready polling. Added waitZonedOrGateReady(checkReadyFn, zoneId, maxMs): polls every GATE_READY_POLL_MS (250ms) and exits early when the gate ability/gem/item becomes ready again (fizzle/collapse resolved) instead of sitting out the full GATE_ZONE_WAIT_MS (90s cap). Applied to all four gate-cast paths: AA and spell in tryGateToPoK_AAorSpellOnly(), AA and spell in tryGateToPoK(), Drunkard's Stein in tryGateSteinToPoK(), and philters/potions in tryGatePotionsClickiesToPoK(). Typical collapse/fizzle wait drops from ~90s to ~3-5s. Updated warn messages in tryGateToPoK() AA/spell loops (was "waiting for AA again" — now "collapse/fizzle; retrying"). GATE_ZONE_WAIT_MS (90s) remains as safety cap; no config changes needed.
+-- 3.19: Low-level Highpass safe gate (Option A). HIGHPASS_SAFE_GATE_LEVEL (default 40) — if Me.Level < threshold, nav to LOC.HIGHPASS_SAFE_GATE (outside Tiger room, no NPC clusters) before gate ladder runs in leaveHighpassTowardNorthQeynos. Character is still invis during nav; gate drops invis away from guards. Set HIGHPASS_SAFE_GATE_LEVEL=0 to disable. LOC.HIGHPASS_SAFE_GATE = { -78.13, 625.50, -18.68 } (verified in-game, heading WSW from Tiger room).
+-- 3.18: Objective timeout no longer kills the run. waitObjectiveDone timeout replaced fail() with warn() — loop retries the same objective automatically on next iteration. runObjectiveStep wrapped in pcall — travel/gate fail() errors (e.g. "Could not reach PoK") warn and retry instead of crashing; stop requests re-thrown so Stop/close still works.
+-- 3.17: Fix mana med threshold — meditateToManaPpp was hardcoded to 40 in both pppokerApplyMovementClassBuff and pppokerApplyInvisClassBuff. Low-level casters with >40 mana but less than spell cost would skip sitting entirely and fail the cast. Now passes math.max(40, spellData.Mana()) so the script sits until actually able to cast the spell. Added shouldStop() inside the med loop so Stop request exits immediately instead of waiting up to 2 min for timeout. Med log now shows have/need values.
 -- 3.16: Shutdown cleanup — add cleanupAfterRun(): unpause RGMercs, unpause CWTN, unload MQ2AutoSize only if PPPoker loaded it (autosizePreloaded checked at script start via IIFE). cleanupAfterRun() now called on: normal quest completion, mid-run early exits (task unavailable / objectives gone), user stop, and any Lua error (pcall handler in main loop). Pre-preflight early exits (no task, no objectives, title mismatch) keep plain unpause pairs — AutoSize not yet loaded at those points.
 -- 3.15: Fix RGMercs pause — solo script, no group: /rgl pauseall -> /rgl pause, /rgl unpauseall -> /rgl unpause. AutoSize: load plugin then /autosize self 3 (consistent run size; mount size left to user's AutoSize config). Clean stale prepBeforeTasselLeg doc comment (was still referencing removed Guise shrink).
 -- 3.14: DRU/RNG camouflage fixes. DRU INVIS_CLASS_BUFFS: remove bogus "Invisibility" (DRU can't mem it — was triggering failed /memspell + 8s wait), add full camo ladder best→worst: "Improved Superior Camouflage" (Lv 48, Improved Invis), "Superior Camouflage" (Lv 18), "Camouflage" (Lv 4). RNG: add "Superior Camouflage" (Lv 47) before base "Camouflage" (Lv 14). INVIS_SELF_AA_NAMES: add "Innate Camouflage" (DRU/RNG AA, Alt Act ID 80 per EQResource). INVIS_GROUP_AA_NAMES: add "Shared Camouflage" (DRU/RNG group camo AA, Alt Act ID 518). Both AA names exit cleanly for non-DRU/RNG (AltAbility returns 0 → skipped).
@@ -127,7 +137,7 @@ local ImAnim = require('ImAnim')
 local stopRequested = false
 
 local PP = {
-    VERSION = "3.16",
+    VERSION = "3.26",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -326,7 +336,7 @@ local PP = {
     --- If true, and invis is up from non-AA source, try invis AA first when ready (upgrade behavior).
     INVIS_PREFER_AA_OVER_EXISTING = true,
     --- If > 0: when invis is up, re-apply if any **tracked** buff has `Me.Buff(name).Duration.Ticks` at or below this (EQ tick ≈ 6s). 0 = never refresh by duration (only when fully dropped). PAL potion users: try 8–15 ticks (~48–90s warning).
-    INVIS_REFRESH_MIN_TICKS_REMAINING = 0,
+    INVIS_REFRESH_MIN_TICKS_REMAINING = 8,
     --- Extra buff **names** to read ticks on (exact `/echo ${Me.Buff[x].Name}`). Potion effects may differ from item name — add what your client shows. Merged with class spells + `INVIS_ITEM_NAMES` for tick checks.
     INVIS_DURATION_TRACK_EXTRA_NAMES = {
         "Cloudy Potion",
@@ -339,6 +349,8 @@ local PP = {
     HIGHPASS_ENTRY_DELAY_MS = 350,
     --- After `/keypress hail` on Quinn / Mhrai — lets journal + target clear before next loop (was 1500).
     HIGHPASS_POST_HAIL_DELAY_MS = 1200,
+    --- If Me.Level < this, nav to LOC.HIGHPASS_SAFE_GATE before gating out of Highpass (low-level / KOS protection). Set 0 to disable.
+    HIGHPASS_SAFE_GATE_LEVEL = 40,
     --- Tiger painting (obj 12): extra settle after `/nav`; face heading (EQ 0–512, 128 ≈ east) toward update.
     TIGER_NAV_SETTLE_MS = 1200,
     TIGER_FACE_HEADING = 128,
@@ -431,6 +443,8 @@ local PP = {
         LUMBER_3 = { -408, -267, -12 },
         --- Tiger painting (obj 12): locyxz; face east (`TIGER_FACE_HEADING` 128) after nav for journal update.
         TIGER = { -126.49, 570.88, -14.46 },
+        --- Safe gate spot outside Tiger room — no NPC clusters; used when Me.Level < HIGHPASS_SAFE_GATE_LEVEL. EQ /loc: -78.13, 625.50, -18.68.
+        HIGHPASS_SAFE_GATE = { -78.13, 625.50, -18.68 },
         NQ = { 118, 335, 1 },
         SQ_FISH = { -282, -230, 2 },
         SQ_LION = { 311, -173, 4 },
@@ -497,6 +511,7 @@ PP.PIC_TEST_BAR_OPTS = {
 
 -- Forward decl so header-art loader can log.
 local debugLog
+local warn
 local runBuffUpkeepTick
 
 local function getImVec2(x, y)
@@ -1142,7 +1157,7 @@ local function info(msg)
     pushDebugLine(s, false)
 end
 
-local function warn(msg)
+warn = function(msg)
     local s = stripPppokerPrefix(msg)
     print(string.format("\ao[\ayPPPoker\ao]\at %s\ax", s))
     pushDebugLine("\\ayWARN:\\at " .. s, false)
@@ -1658,11 +1673,17 @@ end
 local function meditateToManaPpp(requiredMana)
     requiredMana = requiredMana or 40
     if (mq.TLO.Me.CurrentMana() or 0) >= requiredMana then return end
-    info(string.format("meditating for mana (need %d)...", requiredMana))
+    -- Med to 50% max mana as safety buffer — avoids repeated sit/stand cycles for each
+    -- subsequent cast (invis refresh, re-gate, etc.) during the same run leg.
+    local maxMana = 0
+    pcall(function() maxMana = tonumber(mq.TLO.Me.MaxMana() or 0) or 0 end)
+    local targetMana = math.max(requiredMana, math.floor(maxMana * 0.5))
+    info(string.format("meditating for mana (need %d, have %d, target %d)...", requiredMana, mq.TLO.Me.CurrentMana() or 0, targetMana))
     mq.cmd("/sit on")
     local t0 = mq.gettime()
     local timeoutMs = 120000
-    while (mq.TLO.Me.CurrentMana() or 0) < requiredMana do
+    while (mq.TLO.Me.CurrentMana() or 0) < targetMana do
+        shouldStop()
         if mq.gettime() - t0 >= timeoutMs then
             warn("meditate timeout; standing.")
             mq.cmd("/stand")
@@ -1672,6 +1693,41 @@ local function meditateToManaPpp(requiredMana)
         if not mq.TLO.Me.Sitting() then mq.cmd("/sit on") end
     end
     mq.cmd("/stand")
+end
+
+--- Detect death and click standard respawn (bind point). Returns true if the character
+--- was dead and has now respawned. Called from runBuffUpkeepTick so it fires during
+--- any navigation or objective-wait loop without needing a dedicated poller.
+local function handleDeathIfNeeded()
+    local ok, state = pcall(function() return mq.TLO.Me.State() end)
+    if not ok or not state or state ~= "DEAD" then return false end
+    warn("Character is dead — waiting for respawn window...")
+    local t0 = mq.gettime()
+    while not mq.TLO.Window("RespawnWnd").Open() do
+        shouldStop()
+        if mq.gettime() - t0 > 30000 then
+            warn("Respawn window did not appear after 30s.")
+            return false
+        end
+        mq.delay(500)
+    end
+    info("Clicking standard respawn (bind point)...")
+    mq.cmd('/notify RespawnWnd RSPB_STANDARD leftmouseup')
+    -- Wait until no longer dead (zone transition + state change)
+    local t1 = mq.gettime()
+    while true do
+        shouldStop()
+        local ok2, st2 = pcall(function() return mq.TLO.Me.State() end)
+        if not ok2 or not st2 or st2 ~= "DEAD" then break end
+        if mq.gettime() - t1 > 60000 then
+            warn("Still dead after 60s — continuing anyway.")
+            break
+        end
+        mq.delay(500)
+    end
+    mq.delay(2000)  -- settle after zone-in
+    info("Respawned — resuming run.")
+    return true
 end
 
 local function bardSeloActive()
@@ -1853,9 +1909,10 @@ local function pppokerApplyMovementClassBuff()
                 mq.delay(8000)
             end
             local maxRetries = tonumber(PP.BUFF_CAST_MAX_RETRIES) or 3
+            local spellMana = math.max(40, tonumber(spellData.Mana() or 0) or 0)
             for attempt = 1, maxRetries do
                 if class ~= "BRD" then
-                    meditateToManaPpp(40)
+                    meditateToManaPpp(spellMana)
                 end
                 if mq.TLO.Me.SpellReady(spell)() then
                     mq.cmd("/target myself")
@@ -2309,8 +2366,9 @@ local function pppokerApplyInvisClassBuff()
                 mq.delay(8000)
             end
             local maxRetries = tonumber(PP.BUFF_CAST_MAX_RETRIES) or 3
+            local spellMana = math.max(40, tonumber(spellData.Mana() or 0) or 0)
             for attempt = 1, maxRetries do
-                meditateToManaPpp(40)
+                meditateToManaPpp(spellMana)
                 if pppokerSongOrSpellReady(class, spell) then
                     mq.cmd("/target myself")
                     mq.delay(400)
@@ -2446,29 +2504,44 @@ runBuffUpkeepTick = function(contextLabel)
         return
     end
     gui.lastBuffUpkeepTick = now
+    if handleDeathIfNeeded() then return end  -- respawned; skip buff checks this tick
     local navMoving = navigationIsActive() or navigationIsPaused() or gui.navPaused
-    local meCasting = false
-    pcall(function()
-        meCasting = mq.TLO.Me.Casting() and true or false
-    end)
-    -- Keep AA/item checks active while moving/casting; restrict gem casts only.
-    local allowSpellCast = (not navMoving) and (not meCasting)
+    -- Determine what needs applying.
+    -- Read invis state once — movement items (Worn Totem) drop invis, so order matters:
+    -- skip movement if invis is up; when invis drops the next tick applies movement then invis.
+    local invOk = pppokerInvisBuffPresent()
     local movOk = pppokerMovementBuffPresent()
-    if not movOk then
-        pppokerEnsureMovementBuff(allowSpellCast)
-    end
+    -- Movement needed only when both are missing (invis up = skip so Worn Totem can't drop it).
+    local needMovement = not movOk and not invOk
+    local needInvis = false
     if PP.BUFF_UPKEEP_AUTO_INVIS ~= false then
-        local invOk = pppokerInvisBuffPresent()
         local minT = tonumber(PP.INVIS_REFRESH_MIN_TICKS_REMAINING) or 0
-        if invOk and minT > 0 and pppokerInvisFadingBelowTicks(minT) then
-            debugLogQuiet("upkeep invis fading - " .. tostring(contextLabel))
-            pppokerEnsureInvisBuff(allowSpellCast)
-        elseif not invOk then
-            if contextLabel then
+        needInvis = not invOk or (invOk and minT > 0 and pppokerInvisFadingBelowTicks(minT))
+    end
+    if (needMovement or needInvis) and not buffsApplyingNow then
+        -- Pause nav so MQ2Nav stops sending movement commands that interrupt spell/item casts.
+        buffsApplyingNow = true
+        if navMoving then
+            mq.cmd('/nav pause')
+            mq.delay(200)
+        end
+        if needMovement then
+            pppokerEnsureMovementBuff(true)
+        end
+        if needInvis then
+            if invOk then
+                debugLogQuiet("upkeep invis fading - " .. tostring(contextLabel))
+            elseif contextLabel then
                 debugLogQuiet("upkeep invis - " .. tostring(contextLabel))
             end
-            pppokerEnsureInvisBuff(allowSpellCast)
+            pppokerEnsureInvisBuff(true)
         end
+        removeLevitationBuffsIfPresent()
+        if navMoving then
+            mq.cmd('/nav pause off')
+        end
+        buffsApplyingNow = false
+    else
         removeLevitationBuffsIfPresent()
     end
 end
@@ -2836,6 +2909,26 @@ local function waitUntilGatePotionReady(potionName, maxMs)
     return itemClickReuseReady(potionName)
 end
 
+--- After a gate cast ends without zoning: poll for zone success OR checkReadyFn() firing.
+--- Exits early when the gate ability/gem/item becomes ready again (fizzle/collapse resolved),
+--- instead of sitting out the full zoneWaitMs. maxMs is only the safety cap.
+local function waitZonedOrGateReady(checkReadyFn, zoneId, maxMs)
+    local poll = PP.GATE_READY_POLL_MS or 250
+    maxMs = maxMs or (PP.GATE_ZONE_WAIT_MS or 90000)
+    local t0 = mq.gettime()
+    while mq.gettime() - t0 < maxMs do
+        shouldStop()
+        if mq.TLO.Zone.ID() == zoneId then
+            return true
+        end
+        if checkReadyFn() then
+            return false  -- ready to retry (fizzle/collapse resolved)
+        end
+        mq.delay(poll)
+    end
+    return mq.TLO.Zone.ID() == zoneId
+end
+
 local function waitCastClearOrZoned(targetZoneId, maxMs)
     maxMs = maxMs or 60000
     local poll = PP.GATE_CAST_CLEAR_POLL_MS or 100
@@ -2917,7 +3010,7 @@ local function tryGateSteinToPoK()
             return true
         end
         mq.delay(postPotionWait)
-        if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+        if waitZonedOrGateReady(function() return itemClickReuseReady(stein) end, PP.GATE_ZONE_ID, zoneWaitMs) then
             return true
         end
         warn(string.format("%s did not reach PoK — waiting for item timer.", stein))
@@ -2974,7 +3067,7 @@ local function tryGatePotionsClickiesToPoK()
                     return true
                 end
                 mq.delay(postPotionWait)
-                if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+                if waitZonedOrGateReady(function() return itemClickReuseReady(potionName) end, PP.GATE_ZONE_ID, zoneWaitMs) then
                     return true
                 end
                 warn(string.format("%s did not reach PoK (fail/collapse) — waiting for item timer.", potionName))
@@ -3029,7 +3122,7 @@ local function tryGateToPoK_AAorSpellOnly()
                 return true
             end
             mq.delay(postCastWait)
-            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+            if waitZonedOrGateReady(gateAltAbilityReady, PP.GATE_ZONE_ID, zoneWaitMs) then
                 return true
             end
             mq.delay(retryBackoff)
@@ -3041,6 +3134,7 @@ local function tryGateToPoK_AAorSpellOnly()
     end
 
     if hasGateSpell() then
+        local gateSpellMana = math.max(40, tonumber(mq.TLO.Spell(spellName).Mana() or 0) or 0)
         for attempt = 1, maxAttempts do
             shouldStop()
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
@@ -3052,6 +3146,7 @@ local function tryGateToPoK_AAorSpellOnly()
                     break
                 end
             end
+            meditateToManaPpp(gateSpellMana)
             if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
                 dismountIfMounted("Gate spell")
             end
@@ -3062,7 +3157,7 @@ local function tryGateToPoK_AAorSpellOnly()
                 return true
             end
             mq.delay(postCastWait)
-            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+            if waitZonedOrGateReady(gateSpellReady, PP.GATE_ZONE_ID, zoneWaitMs) then
                 return true
             end
             mq.delay(retryBackoff)
@@ -3210,11 +3305,11 @@ local function tryGateToPoK()
                 return true
             end
             mq.delay(postCastWait)
-            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+            if waitZonedOrGateReady(gateAltAbilityReady, PP.GATE_ZONE_ID, zoneWaitMs) then
                 return true
             end
             warn(string.format(
-                "Gate AA did not reach PoK (attempt %d/%d) — collapse/interrupt; waiting for AA again.",
+                "Gate AA did not reach PoK (attempt %d/%d) — collapse/fizzle; retrying.",
                 attempt,
                 maxAttempts
             ))
@@ -3227,6 +3322,7 @@ local function tryGateToPoK()
     end
 
     if canSpell then
+        local gateSpellMana = math.max(40, tonumber(mq.TLO.Spell(spellName).Mana() or 0) or 0)
         for attempt = 1, maxAttempts do
             shouldStop()
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
@@ -3241,6 +3337,7 @@ local function tryGateToPoK()
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
                 return true
             end
+            meditateToManaPpp(gateSpellMana)
             if PP.TRAVEL_DISMOUNT_BEFORE_GATE then
                 dismountIfMounted("Gate spell")
             end
@@ -3251,11 +3348,11 @@ local function tryGateToPoK()
                 return true
             end
             mq.delay(postCastWait)
-            if waitForZoneOrFalse(PP.GATE_ZONE_ID, zoneWaitMs) then
+            if waitZonedOrGateReady(gateSpellReady, PP.GATE_ZONE_ID, zoneWaitMs) then
                 return true
             end
             warn(string.format(
-                "Gate spell did not reach PoK (attempt %d/%d) — will wait for gem/recast.",
+                "Gate spell did not reach PoK (attempt %d/%d) — fizzle/collapse; retrying.",
                 attempt,
                 maxAttempts
             ))
@@ -3797,11 +3894,18 @@ local function getObjectiveSlotRaw(task, idx)
     return obj
 end
 
+--- Cached task slot — reset at run start; avoids rescanning up to 30 tasks per objective check.
+local paintingsTaskSlot = nil
+--- Guard: prevents runBuffUpkeepTick re-entry while buffs are being re-applied (nav pause + cast can take several seconds).
+local buffsApplyingNow = false
+
 --- Numeric journal slot 1..N for Paintings (for ${Task[i].Objective[j].*} when named key parse is empty).
 local function getPaintingsTaskSlotNumber()
+    if paintingsTaskSlot then return paintingsTaskSlot end
     for i = 1, PP.MAX_OBJECTIVES do
         local ti = mq.TLO.Task(i)
         if taskEvalExists(ti) and taskIsPaintingsPlayingPoker(ti) then
+            paintingsTaskSlot = i
             return i
         end
     end
@@ -4200,6 +4304,11 @@ local function leaveHighpassTowardNorthQeynos()
     if mq.TLO.Zone.ID() ~= PP.ZONE.HIGHPASS then
         return
     end
+    local safeLevel = tonumber(PP.HIGHPASS_SAFE_GATE_LEVEL) or 0
+    if safeLevel > 0 and (mq.TLO.Me.Level() or 0) < safeLevel then
+        info(string.format("Level %d < %d — nav to safe gate loc before leaving Highpass (low-level KOS protection).", mq.TLO.Me.Level() or 0, safeLevel))
+        navLocNoMount(PP.LOC.HIGHPASS_SAFE_GATE, 1000)
+    end
     info("Tiger Roar done — routing toward North Qeynos (AA → spell → Stein → Slide → philter → run).")
 
     if tryGateToPoK_AAorSpellOnly() then
@@ -4454,6 +4563,7 @@ end
 --- Main automation: first incomplete objective → runObjectiveStep → waitObjectiveDone (objectiveIsComplete). Same data as getQuestProgress / GUI bar.
 function runQuest()
     gui.journalOpenedOnce = false
+    paintingsTaskSlot = nil  -- reset slot cache; task may have been dropped/re-acquired between runs
     local questRunStartTime = os.time()
     mq.cmd(string.format('/popup Starting: Paintings Playing Poker v%s', PP.VERSION))
     pauseCWTNPlugins()
@@ -4547,25 +4657,33 @@ function runQuest()
 
         local instr = objInstruction(task, idx)
         info(string.format("Resume: first incomplete objective %d: %s", idx, instr))
-        runObjectiveStep(idx, task)
-        local waitMs
-        if idx == PP.QUEST_OBJECTIVE_COUNT then
-            waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_FINAL_MS or 300000
-        elseif idx == 1 and (PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS or 0) > 0 then
-            waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS
+        local stepOk, stepErr = pcall(runObjectiveStep, idx, task)
+        if not stepOk then
+            local em = tostring(stepErr or "")
+            -- Re-throw stop/close requests so the main pcall handles them normally.
+            if em:find("Stopped by user", 1, true) then error(em) end
+            warn(string.format("Objective %d step error — will retry next loop: %s", idx, em))
         else
-            waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_MS or 120000
-        end
-        if not waitObjectiveDone(PP.QUEST_TITLE, idx, waitMs) then
-            fail(string.format("Timeout waiting objective %d to complete: %s", idx, instr))
-        end
-        info(mqObjGreen(string.format("Objective %d completed.", idx)))
-        mq.delay(500)
-        if idx == PP.QUEST_OBJECTIVE_COUNT then
-            gui.status = "Quest complete."
-            gui.questComplete = true
-            info(mqObjGreen("All objectives are Done."))
-            break
+            local waitMs
+            if idx == PP.QUEST_OBJECTIVE_COUNT then
+                waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_FINAL_MS or 300000
+            elseif idx == 1 and (PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS or 0) > 0 then
+                waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_OBJ1_MS
+            else
+                waitMs = PP.WAIT_OBJECTIVE_TIMEOUT_MS or 120000
+            end
+            if not waitObjectiveDone(PP.QUEST_TITLE, idx, waitMs) then
+                warn(string.format("Timeout waiting objective %d (%s) — loop will retry.", idx, instr))
+            else
+                info(mqObjGreen(string.format("Objective %d completed.", idx)))
+                mq.delay(500)
+                if idx == PP.QUEST_OBJECTIVE_COUNT then
+                    gui.status = "Quest complete."
+                    gui.questComplete = true
+                    info(mqObjGreen("All objectives are Done."))
+                    break
+                end
+            end
         end
     end
 
