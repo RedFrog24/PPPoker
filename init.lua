@@ -4,6 +4,10 @@
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
 -- Version controlled by PP.VERSION (single source of truth - drives window title and run popup).
 -- Changelog:
+-- 3.38: Nav stuck detection in moving(). Samples Me.X/Y every 500ms while nav is active and not paused. If position unchanged more than 3 units over 3 seconds, strafes left for 500ms (/keypress strafe_left hold + release pattern from astone02) to clear geometry clip - matches the manual Ctrl+Left Arrow fix AL uses for the PoK anniversary tent area. Resets position and timer after each strafe attempt. Only fires when navigationIsActive() and not paused for buff upkeep (no false triggers during nav pause block).
+-- 3.37: Mount counts as movement buff. pppokerMovementBuffPresent() now checks Me.Mount.ID() first - keyring mounts provide speed without placing a SPA 3 spell in the buff bar, so the HasSPA[3] scan missed them entirely. Result was false "movement buff missing" warn and Worn Totem attempt every time the character was already mounted. isMounted() is defined later in the file so the check is inlined directly using the same TLO.
+-- 3.36: Apply invis before zoning into Neriak (not just after). prepCityTravel now accepts the destination zoneId and applies ensureInvisIfNeeded before /travelto when destination is NERIAK_A or NERIAK_B and TRAVEL_INVIS_BEFORE_NERIAK is true. Previously invis was only applied inside ensureSpeedAndInvisInNeriak after zone-in - guards at the Neriak zone line killed low-level characters before invis could land. ensureZone passes zoneId to prepCityTravel. Invis still reconfirmed after zone-in by ensureSpeedAndInvisInNeriak as before.
+-- 3.35: Mount picker dropdown. Always-visible combo in the UI (below Commemoratives, above Debug panel) listing all keyring mounts. Levitating mounts (HasSPA[57] on item clicky spell, SPA 57 = SE_Levitation confirmed in game) shown in orange with "(levitates)" label and tooltip warning. Non-levitating mounts show green tooltip. Choice saved to pppoker_settings.lua (mq.pickle) by mount name - survives restarts. If saved mount removed from keyring, picker resets and prompts again. Single mount auto-selected silently with no UI prompt. Yellow "Choose Mount" + advisory text when multiple mounts and none yet selected. State vars (ppSettings, mountList, mountPickerIndex) stored in gui table to stay under LuaJIT 200-local limit; ppSettingsFile path inlined.
 -- 3.34: Universal movement buff detection via SPA 3 (SE_MovementSpeed). pppokerMovementBuffPresent() previously checked only named class spells and AA buff names - missed any item clicky buff (e.g. Worn Totem gives "Blessing of Swiftness", unknown to the script). Fix: scan all 42 buff slots and check Spell(buffName).HasSPA(3)() - SPA 3 is the EQ movement speed effect code, confirmed TRUE for both "Blessing of Swiftness" and "Spirit of Wolf" in game. Works for any class spell, AA, or item clicky with zero config. BRD Selo songs remain a separate check via bardSeloActive() since songs live in Me.Song not Me.Buff. Removed MOVEMENT_ITEM_BUFF_NAMES config added in 3.33 - no longer needed.
 -- 3.33: Movement item buff detection. pppokerMovementBuffPresent() only checked class spell names and AA names - had no knowledge of what buff effect a movement item grants. Worn Totem gives "Blessing of Swiftness" which was not in any checked list, so the script always reported movement buff missing even when the totem buff was active, causing the "movement buff missing - use SoW/Selo/totem manually" warn every tick. Fix: new config MOVEMENT_ITEM_BUFF_NAMES (default: "Blessing of Swiftness") - exact buff names granted by movement items. pppokerMovementBuffPresent() now checks these via Me.Buff().ID() after the class spell and AA checks.
 -- 3.32: Replace all em dashes (U+2014) with plain hyphens throughout init.lua. MQ's default font renders em dashes as ??? (three question marks, one per UTF-8 byte) in EQ console output. Affected all info() and warn() calls that used — as a separator. 205 instances replaced globally.
@@ -144,8 +148,9 @@ local ImAnim = require('ImAnim')
 
 local stopRequested = false
 
+
 local PP = {
-    VERSION = "3.34",
+    VERSION = "3.38",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -495,6 +500,12 @@ local gui = {
     shimmerState = {},
     --- Commemorative coin icon texture (loaded once).
     commIconTex = nil,
+    --- Mount picker: saved settings table (loaded from pickle on startup).
+    ppSettings = {},
+    --- Mount picker: keyring entries { name, slot, levitates } populated at startup.
+    mountList = {},
+    --- Mount picker: index into mountList (0 = not yet chosen).
+    mountPickerIndex = 0,
 }
 
 -- Status bar options (same style defaults used in init.lua).
@@ -1178,6 +1189,118 @@ local function getCommemorativeCount()
     return 0
 end
 
+-- Settings Persistence
+
+local function loadPPSettings()
+    local f = loadfile(mq.configDir .. "pppoker_settings.lua")
+    if not f then return end
+    local ok, data = pcall(f)
+    if ok and type(data) == "table" then gui.ppSettings = data end
+end
+
+local function savePPSettings()
+    mq.pickle(mq.configDir .. "pppoker_settings.lua", gui.ppSettings)
+end
+
+-- Mount Picker
+
+local function initMountList()
+    local count = tonumber(mq.TLO.Mount.Count() or 0) or 0
+    gui.mountList = {}
+    gui.mountPickerIndex = 0
+    for i = 1, count do
+        local okN, name = pcall(function()
+            return mq.parse(string.format("${Mount[%d].Name}", i))
+        end)
+        name = tostring(okN and name or ""):gsub("^%s+", ""):gsub("%s+$", "")
+        if name ~= "" and name ~= "NULL" then
+            local okL, lev = pcall(function()
+                return mq.TLO.Mount(i).Item.Clicky.Spell.HasSPA(57)()
+            end)
+            gui.mountList[#gui.mountList + 1] = { name = name, slot = i, levitates = (okL and lev == true) }
+        end
+    end
+    -- Restore saved choice if still in keyring
+    local saved = gui.ppSettings.mountName
+    if saved then
+        for i, m in ipairs(gui.mountList) do
+            if m.name == saved then
+                gui.mountPickerIndex = i
+                PP.MOUNT_KEYRING_SLOT = m.slot
+                return
+            end
+        end
+        -- Saved mount no longer in keyring - clear it
+        gui.ppSettings.mountName = nil
+        savePPSettings()
+    end
+    -- Auto-select silently when only one mount (no choice to make)
+    if #gui.mountList == 1 then
+        gui.mountPickerIndex = 1
+        PP.MOUNT_KEYRING_SLOT = 1
+    end
+end
+
+local function drawMountPicker()
+    if #gui.mountList == 0 then return end
+    local needsChoice = #gui.mountList > 1 and gui.mountPickerIndex == 0
+    local preview = gui.mountPickerIndex > 0 and gui.mountList[gui.mountPickerIndex].name or "-- Choose Mount --"
+    local yellow = getImVec4(1.0, 0.85, 0.0, 1.0)
+    local orange = getImVec4(1.0, 0.45, 0.15, 1.0)
+    imgui.Text("Mount:")
+    imgui.SameLine()
+    local previewColorPushed = false
+    if needsChoice and yellow then
+        pcall(function()
+            imgui.PushStyleColor(ImGuiCol.Text, yellow)
+            previewColorPushed = true
+        end)
+    end
+    imgui.SetNextItemWidth(-1)
+    local opened = imgui.BeginCombo("##ppMountPicker", preview)
+    if previewColorPushed then
+        pcall(function() imgui.PopStyleColor() end)
+    end
+    if opened then
+        for i, m in ipairs(gui.mountList) do
+            local isSelected = (gui.mountPickerIndex == i)
+            local colorPushed = false
+            if m.levitates and orange then
+                pcall(function()
+                    imgui.PushStyleColor(ImGuiCol.Text, orange)
+                    colorPushed = true
+                end)
+            end
+            local label = m.name .. (m.levitates and "  (levitates)" or "") .. "##mnt" .. i
+            if imgui.Selectable(label, isSelected) then
+                gui.mountPickerIndex = i
+                PP.MOUNT_KEYRING_SLOT = m.slot
+                gui.ppSettings.mountName = m.name
+                savePPSettings()
+            end
+            if colorPushed then
+                pcall(function() imgui.PopStyleColor() end)
+            end
+            if isSelected then
+                pcall(function() imgui.SetItemDefaultFocus() end)
+            end
+            if imgui.IsItemHovered() then
+                if m.levitates then
+                    imgui.SetTooltip("This mount applies levitation.\nCan cause issues in some areas - choose a non-levitating mount if possible.")
+                else
+                    imgui.SetTooltip("No levitation - recommended for this script.")
+                end
+            end
+        end
+        imgui.EndCombo()
+    end
+    if needsChoice and yellow then
+        pcall(function()
+            imgui.TextColored(yellow, "Select a mount above before running.")
+        end)
+    end
+end
+
 local function drawCommemorativeCoinsRow()
     local cnt = getCommemorativeCount()
     local green = getImVec4(0.15, 0.92, 0.38, 1.0)
@@ -1399,10 +1522,37 @@ local function moving(timeoutMs)
         mq.delay(2500)
     end
     local start = os.time()
+    local stuckLastX = mq.TLO.Me.X() or 0
+    local stuckLastY = mq.TLO.Me.Y() or 0
+    local stuckLastMoveT = mq.gettime()
+    local stuckSampleT = mq.gettime()
     while navigationIsActive() or navigationIsPaused() or gui.navPaused do
         shouldStop()
         runBuffUpkeepTick("moving")
         mq.delay(100)
+        -- Stuck detection: sample position every 500ms, only while nav is truly moving (not paused for buff upkeep).
+        -- If position unchanged > 3 units in 3s, strafe left briefly to clear geometry clip.
+        if navigationIsActive() and not navigationIsPaused() and not gui.navPaused then
+            local now = mq.gettime()
+            if now - stuckSampleT >= 500 then
+                stuckSampleT = now
+                local cx = mq.TLO.Me.X() or stuckLastX
+                local cy = mq.TLO.Me.Y() or stuckLastY
+                local dx, dy = cx - stuckLastX, cy - stuckLastY
+                if math.sqrt(dx * dx + dy * dy) > 3 then
+                    stuckLastX, stuckLastY = cx, cy
+                    stuckLastMoveT = now
+                elseif now - stuckLastMoveT > 3000 then
+                    debugLog("Nav stuck detected - strafing left to clear geometry.")
+                    mq.cmd("/keypress strafe_left hold")
+                    mq.delay(500)
+                    mq.cmd("/keypress strafe_left release")
+                    stuckLastMoveT = now
+                    stuckLastX = mq.TLO.Me.X() or cx
+                    stuckLastY = mq.TLO.Me.Y() or cy
+                end
+            end
+        end
         if (os.time() - start) * 1000 > timeoutMs then
             warn("Navigation timeout threshold reached; waiting grace period...")
             mq.delay(5000)
@@ -1762,6 +1912,9 @@ local function bardSeloActive()
 end
 
 local function pppokerMovementBuffPresent()
+    -- Keyring mounts provide speed without a spell buff in the buff bar
+    local okM, mountId = pcall(function() return mq.TLO.Me.Mount.ID() end)
+    if okM and tonumber(mountId or 0) > 0 then return true, "mounted" end
     -- BRD: Selo songs live in the song window (Me.Song), not buff slots
     if mq.TLO.Me.Class.ShortName() == "BRD" then
         local which = bardSeloActive()
@@ -2566,10 +2719,12 @@ local function prepBeforeTasselLeg()
     end
 end
 
-local function prepCityTravel(whereLabel)
+local function prepCityTravel(whereLabel, zoneId)
     if not PP.TRAVEL_CITY_PREP_BEFORE_ZONE then return end
     whereLabel = whereLabel or "city zone"
-    debugLogQuiet("prep for " .. whereLabel .. " - movement speed only (invis at leg-specific points).")
+    local needsPreInvis = tonumber(zoneId or 0) == PP.ZONE.NERIAK_A
+        or tonumber(zoneId or 0) == PP.ZONE.NERIAK_B
+    debugLogQuiet("prep for " .. whereLabel .. " - movement speed" .. (needsPreInvis and " + invis before zone-in." or " only."))
     local movOk, movDetail = pppokerEnsureMovementBuff()
     if movOk then
         debugLogQuiet("movement OK (" .. tostring(movDetail or "?") .. ").")
@@ -2578,6 +2733,10 @@ local function prepCityTravel(whereLabel)
     end
     waitUntilMs(8000, function() return not mq.TLO.Me.Casting() end)
     mq.delay(300)
+    -- Apply invis before entering Neriak - guards at zone-in are lethal for low-level characters
+    if needsPreInvis and PP.TRAVEL_INVIS_BEFORE_NERIAK then
+        ensureInvisIfNeeded(whereLabel .. " (before zone-in)")
+    end
 end
 
 local function zoneWantsCityPrep(zoneId)
@@ -2679,7 +2838,7 @@ local function ensureZone(zoneId, travelToArg, label, timeoutMs)
         return
     end
     if PP.TRAVEL_CITY_PREP_BEFORE_ZONE and zoneWantsCityPrep(zoneId) then
-        prepCityTravel(tostring(label))
+        prepCityTravel(tostring(label), zoneId)
     end
     info("Traveling to " .. mqItem(tostring(label)) .. ".")
     mq.cmdf('/squelch /travelto %s', travelToArg)
@@ -4949,6 +5108,7 @@ function drawGUI()
             imgui.Separator()
             drawCommemorativeCoinsRow()
             imgui.Separator()
+            drawMountPicker()
 
             if gui.debugOpen then
                 local began = pcall(function()
@@ -4983,6 +5143,8 @@ function drawGUI()
     end
 end
 
+loadPPSettings()
+initMountList()
 mq.imgui.init("PPPokerGUIV2", drawGUI)
 
 _G.PPPokerV2 = _G.PPPokerV2 or {}
