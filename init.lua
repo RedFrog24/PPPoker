@@ -4,6 +4,12 @@
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
 -- Version controlled by PP.VERSION (single source of truth - drives window title and run popup).
 -- Changelog:
+-- 3.60: Fix double BST invis AA fire. aaReadyById() returned true when Me.AltAbilityReady[id] returned nil (character does not have that AA) - this caused /alt act to fire for IDs the character never trained. Fix: default changed true→false (unknown = not ready). BST IDs removed from INVIS_SELF_AA_IDS - name path (pppokerInvisAAId via Me.AltAbility(name).ID()) correctly returns 0 for untrained AAs and skips them cleanly. BST invis AAs remain in INVIS_SELF_AA_NAMES where they work correctly.
+-- 3.59: Movement buff + remount after gate fails in direct-travel paths. (1) tryGateDirectOrPokFallback() now calls pppokerEnsureMovementBuff() + mountIfNeeded() after gate fails, before /travelto - covers Highpass→NQ runner path and any other direct travelto fallback. mountIfNeeded() is a no-op in Highpass (TRAVEL_NO_MOUNT_IN_HIGHPASS=true) but ensures mount in other zones. (2) leaveHighpassTowardNorthQeynos() calls pppokerEnsureMovementBuff() at the safe gate spot before gate attempts - runners get SoW/Totem applied while clear of NPC clusters before the /travelto qeynos2 run.
+-- 3.58: Remount after failed gate before /travelto poknowledge. tryGateToPoK() calls dismountIfMounted("Gate") at the start - when gate is unavailable the character is left on foot and /travelto poknowledge runs dismounted. Fix: pppokerEnsureMovementBuff() + mountIfNeeded() added inside tryGateToPoKOrTraveltoPok() after gate fails, before the /travelto command. Applies to all callers (Betty runner path, obj 13/16 fallbacks, etc.).
+-- 3.57: Speed buff before mount in East FP→PoK→Neriak path. travelToPokHubThenNeriakFromEastFp() called mountIfNeeded() with no prior pppokerEnsureMovementBuff() call - character arrived in PoK on foot with no speed buff, mount check fired without buff fallback. Added pppokerEnsureMovementBuff() before mountIfNeeded() so SoW/Totem is applied first; mount is then used on top of that.
+-- 3.56: BST invis support. BST has no gem invis spells - invis via Natural Invisibility AA line only (confirmed EQResource altactlist IDs 980/8301). Added BST={} to INVIS_CLASS_BUFFS (empty, like CLR). Added Natural Invisibility/Improved/Perfected to INVIS_SELF_AA_NAMES. Added AA IDs 8301 (Improved) and 980 (base) to INVIS_SELF_AA_IDS for reliable ID-first activation. Non-BST classes return 0 from AltAbility for these IDs so they exit cleanly.
+-- 3.55: Fix runner Neriak exit after Toadstool. /travelto neriaka does not work from inside Neriak Commons (NERIAK_B) - EasyFind must be used to navigate to the zone connection. Three fixes: (1) TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA default changed false→true. (2) EASYFIND_NERIAKA_SHORTNAME updated to "Neriak - Foreign Quarter" (full connection name; shortname did not find the zone line). (3) runnerCommonsNavThenTraveltoNeriakaIfNeeded() now uses /easyfind instead of /travelto neriaka. (4) Runner zone chain now calls easyfindNeriakForeignFromCommonsIfNeeded() with /travelto fallback instead of ensureZone(NERIAK_A) directly.
 -- 3.54: Direct death check in waitObjectiveDone. Fresh restart worked because waitForZoneOrFalse has a direct handleDeathIfNeeded() call (v3.49). Mid-run deaths ended up in waitObjectiveDone which only used rate-limited runBuffUpkeepTick - if upkeep fired recently, handleDeathIfNeeded was skipped entirely. Fix: same direct hover check pattern added at top of waitObjectiveDone loop, returns false immediately after respawn so objective retries cleanly.
 -- 3.53: Rework handleDeathIfNeeded respawn click. Previous approach waited up to 30s for RespawnWnd.Open() - if that check silently failed (window open but MQ not seeing it, or timing issue), returned false and blocked 30s per upkeep call, consuming the full 120s objective timeout across 4 failed cycles with no visible output. Fix: click immediately on hover (window is open when Me.Hovering() is true), retry every 1s inside the hover wait loop. RespawnWnd.Open() check kept only to guard the notify - if window not open yet, retry next second.
 -- 3.52: POK_NEK_WAYPOINT added to prepCityTravel for all NERIAK_A paths. Waypoint was only in travelNeriakForeignFromPokHub() but four ensureZone(NERIAK_A) callers (obj 4 else/Nektulos branches, obj 5, and others) go through prepCityTravel directly, bypassing the waypoint when character is in PoK. Fix: inline nav to POK_NEK_WAYPOINT in prepCityTravel when current zone is PoK and destination is NERIAK_A. Uses mq.cmd + distance loop (no navLoc/moving forward reference needed).
@@ -166,7 +172,7 @@ local stopRequested = false
 
 
 local PP = {
-    VERSION = "3.54",
+    VERSION = "3.60",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -277,8 +283,8 @@ local PP = {
     SPELLGEM_MEM_CAP = 8,
     --- After Gate fails: wait this long for direct `/travelto` to next zone before falling back to PoK hub (ms).
     TRAVEL_DIRECT_ZONE_WAIT_MS = 120000,
-    --- Objective 8 from **Neriak Commons** (Toadstool): `/easyfind <shortname>` to Foreign Quarter zone line before Gate/`/travelto` (requires MQ2EasyFind + MQ2Nav). Default false - set true if your client needs the zone-line path.
-    TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA = false,
+    --- Objective 8 from **Neriak Commons** (Toadstool): `/easyfind` to Foreign Quarter zone line (requires MQ2EasyFind + MQ2Nav). Default true - /travelto neriaka does not work from inside Neriak Commons; EasyFind navigates to the zone connection directly.
+    TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA = true,
     --- Obj 8: after Toadstool, if Zueria Slide item + level - **Nektulos** port (faster than running out of Neriak), then Moors→Highpass when `TRAVEL_HIGHPASS_VIA_MOORS`.
     TRAVEL_TOADSTOOL_ZUERIA_SLIDE_TO_NEK = true,
     --- Obj 8: if Gate to PoK fails and character has **no** Gate AA and **no** Gate spell, try `/travelto moors` (Blightfire) then Highpass before PoK-hub fallback (melee / rare caster path).
@@ -289,8 +295,9 @@ local PP = {
     TRAVEL_LION_ZUERIA_SLIDE_TO_NEK = true,
     --- Obj 13 from Highpass (after Tiger Roar): same Slide→Nek option before potion/direct `/travelto qeynos2` (was missing; used old monolithic Gate path only).
     TRAVEL_TIGER_ZUERIA_SLIDE_TO_NEK = true,
-    --- Zone shortname for `/easyfind` (RedGuides: matches zone connection to Neriak Foreign Quarter).
-    EASYFIND_NERIAKA_SHORTNAME = "neriaka",
+    --- EasyFind connection name for Neriak Foreign Quarter zone line from Neriak Commons.
+    --- Full connection name required - shortname "/travelto neriaka" does not work from inside Neriak.
+    EASYFIND_NERIAKA_SHORTNAME = "Neriak - Foreign Quarter - 1",
     MOVEMENT_CLASS_BUFFS = {
         BRD = { "Selo's Accelerando", "Selo's Song of Travel" },
         BST = { "Spirit of Wolf", "Spirit of the Shrew" },
@@ -312,6 +319,8 @@ local PP = {
     --- Per-class spell/song **gem** invis (Live names - verify in your spellbook; script skips unknown IDs). BRD: songs (not Veil of Midnight - that name does not exist). PAL: no standard gem invis - use `INVIS_ITEM_NAMES` (e.g. Cloudy Potion).
     INVIS_CLASS_BUFFS = {
         CLR = {},
+        --- BST has no gem invis spells - invis via Natural Invisibility AA line only (IDs 980/8301). See INVIS_SELF_AA_NAMES.
+        BST = {},
         --- Level 19 song then 51 travel song (group invis + utilities). Ranks may read as "Shauri's Sonorous Clouding II" in book - add rank-specific names if MQ buff name differs.
         BRD = {
             "Shauri's Sonorous Clouding",
@@ -337,8 +346,13 @@ local PP = {
         "Cloak of Shadows",
         --- DRU/RNG: Alt Act ID 80 per EQ Resource. AltAbility lookup returns 0 for classes without it - exits cleanly.
         "Innate Camouflage",
+        --- BST: Natural Invisibility AA line (Improved Invis effect). AltAbility returns 0 on non-BST - exits cleanly.
+        "Perfected Natural Invisibility",
+        "Improved Natural Invisibility",
+        "Natural Invisibility",
     },
     --- Preferred invis AA ids (Live-first). Used before AA-name fallback.
+    --- BST invis AAs use the name path (INVIS_SELF_AA_NAMES) - Me.AltAbility(name).ID() correctly returns 0 for AAs the character doesn't have. ID path had a bug where unknown IDs returned true and fired anyway.
     INVIS_SELF_AA_IDS = {},
     INVIS_GROUP_AA_IDS = {},
     INVIS_GROUP_AA_NAMES = {
@@ -1988,7 +2002,7 @@ local function aaReadyById(aaId)
         return mq.parse(string.format("${Me.AltAbilityReady[%d]}", aaId))
     end)
     if not ok or out == nil then
-        return true
+        return false  -- unknown state = not ready; avoids firing /alt act for AAs the character doesn't have
     end
     local s = tostring(out):upper()
     return s == "TRUE" or s == "1" or s == "ON"
@@ -3186,7 +3200,7 @@ local function waitCastClearOrZoned(targetZoneId, maxMs)
     return mq.TLO.Zone.ID() == targetZoneId
 end
 
---- From Neriak Commons (Toadstool): EasyFind nearest zone connection to Neriak Foreign (`neriaka`), then wait for zone / nav (RedGuides `/easyfind` + zone shortname).
+--- From Neriak Commons (Toadstool): EasyFind to the Neriak Foreign Quarter zone connection. /travelto neriaka does not work from inside Neriak - EasyFind navigates to the zone line directly.
 local function easyfindNeriakForeignFromCommonsIfNeeded()
     if PP.TRAVEL_TOADSTOOL_LEAVE_EASYFIND_NERIAKA == false then
         return
@@ -3640,6 +3654,9 @@ end
 --- Gate/potion to PoK when possible; otherwise `/travelto` PoK hub (same pattern as East FP → Neriak).
 local function tryGateToPoKOrTraveltoPok()
     if tryGateToPoK() then return true end
+    -- Gate failed/unavailable (tryGateToPoK dismounts for the attempt) - remount before /travelto run to PoK.
+    pppokerEnsureMovementBuff()
+    mountIfNeeded()
     warn("Gate/potion to PoK unavailable or failed - /travelto " .. tostring(PP.POK_TRAVEL_SHORTNAME or "poknowledge") .. ".")
     mq.cmdf("/squelch /travelto %s", PP.POK_TRAVEL_SHORTNAME or "poknowledge")
     if not waitForZoneOrFalse(PP.GATE_ZONE_ID, 180000) then
@@ -3652,6 +3669,9 @@ end
 local function tryGateDirectOrPokFallback(directTravelArg, directZoneId, directLabel)
     directLabel = directLabel or tostring(directTravelArg)
     if tryGateToPoK() then return true end
+    -- Gate failed (may have dismounted) - ensure movement buff and remount before direct travel.
+    pppokerEnsureMovementBuff()
+    mountIfNeeded()
     if directTravelArg and directZoneId then
         local waitMs = tonumber(PP.TRAVEL_DIRECT_ZONE_WAIT_MS) or 120000
         info(string.format("No Gate - direct /travelto %s (%s).", tostring(directTravelArg), directLabel))
@@ -3789,6 +3809,7 @@ local function travelToPokHubThenNeriakFromEastFp()
     if mq.TLO.Zone.ID() ~= PP.ZONE.POK then
         tryGateToPoKOrTraveltoPok()
     end
+    pppokerEnsureMovementBuff()
     mountIfNeeded()
     mq.delay(2000)
     travelNeriakForeignFromPokHub()
@@ -4497,14 +4518,14 @@ local function runnerCommonsNavThenTraveltoNeriakaIfNeeded()
     if type(loc) ~= "table" or loc[1] == nil or loc[2] == nil or loc[3] == nil then
         return
     end
-    info("Runner path - nav to Foreign Quarter prep, then /travelto neriaka.")
+    local connName = tostring(PP.EASYFIND_NERIAKA_SHORTNAME or "Neriak - Foreign Quarter"):gsub("^%s+", ""):gsub("%s+$", "")
+    info("Runner path - nav to prep point, then /easyfind " .. connName .. " to zone line.")
     navLocNoMount(loc, 1200)
-    moving()
     mq.delay(600)
-    mq.cmd("/squelch /travelto neriaka")
+    mq.cmdf("/squelch /easyfind %s", connName)
     local waitMs = tonumber(PP.TRAVEL_DIRECT_ZONE_WAIT_MS) or 120000
     if not waitForZoneOrFalse(PP.ZONE.NERIAK_A, waitMs) then
-        warn("Did not zone to Neriak Foreign Quarter after /travelto neriaka - continuing.")
+        warn("Did not zone to Neriak Foreign Quarter after /easyfind - continuing.")
     end
 end
 
@@ -4550,7 +4571,12 @@ local function leaveToadstoolTowardHighpass()
         and (not hasGateSpell())
     then
         info("No Gate AA/spell - runner-style zone chain: neriaka → nektulos → moors → highpasshold.")
-        ensureZone(PP.ZONE.NERIAK_A, "neriaka", "Neriak Foreign Quarter")
+        -- Must use EasyFind to reach Foreign Quarter zone line from inside Neriak Commons - /travelto neriaka does not work within the city.
+        easyfindNeriakForeignFromCommonsIfNeeded()
+        if mq.TLO.Zone.ID() ~= PP.ZONE.NERIAK_A then
+            warn("Could not reach Neriak Foreign Quarter via EasyFind - attempting travelto fallback.")
+            ensureZone(PP.ZONE.NERIAK_A, "neriaka", "Neriak Foreign Quarter")
+        end
         ensureZone(PP.ZONE.NEKTULOS, "nektulos", "Nektulos Forest")
         poker2MountDelayInNekOrMoors()
         ensureZone(PP.ZONE.MOORS, "moors", "Blightfire Moors")
@@ -4575,6 +4601,8 @@ local function leaveHighpassTowardNorthQeynos()
         info(string.format("Level %d < %d - nav to safe gate loc before leaving Highpass (low-level KOS protection).", mq.TLO.Me.Level() or 0, safeLevel))
         navLocNoMount(PP.LOC.HIGHPASS_SAFE_GATE, 1000)
     end
+    -- Ensure movement buff at safe spot before gate/travel attempts (runners need SoW/Totem; can't mount in Highpass).
+    pppokerEnsureMovementBuff()
     info("Tiger Roar done - routing toward North Qeynos (AA → spell → Stein → Slide → philter → run).")
 
     if tryGateToPoK_AAorSpellOnly() then
