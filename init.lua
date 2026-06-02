@@ -4,6 +4,22 @@
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
 -- Version controlled by PP.VERSION (single source of truth - drives window title and run popup).
 -- Changelog:
+-- 3.54: Direct death check in waitObjectiveDone. Fresh restart worked because waitForZoneOrFalse has a direct handleDeathIfNeeded() call (v3.49). Mid-run deaths ended up in waitObjectiveDone which only used rate-limited runBuffUpkeepTick - if upkeep fired recently, handleDeathIfNeeded was skipped entirely. Fix: same direct hover check pattern added at top of waitObjectiveDone loop, returns false immediately after respawn so objective retries cleanly.
+-- 3.53: Rework handleDeathIfNeeded respawn click. Previous approach waited up to 30s for RespawnWnd.Open() - if that check silently failed (window open but MQ not seeing it, or timing issue), returned false and blocked 30s per upkeep call, consuming the full 120s objective timeout across 4 failed cycles with no visible output. Fix: click immediately on hover (window is open when Me.Hovering() is true), retry every 1s inside the hover wait loop. RespawnWnd.Open() check kept only to guard the notify - if window not open yet, retry next second.
+-- 3.52: POK_NEK_WAYPOINT added to prepCityTravel for all NERIAK_A paths. Waypoint was only in travelNeriakForeignFromPokHub() but four ensureZone(NERIAK_A) callers (obj 4 else/Nektulos branches, obj 5, and others) go through prepCityTravel directly, bypassing the waypoint when character is in PoK. Fix: inline nav to POK_NEK_WAYPOINT in prepCityTravel when current zone is PoK and destination is NERIAK_A. Uses mq.cmd + distance loop (no navLoc/moving forward reference needed).
+-- 3.51: Hover guard on all casting gateway functions. pppokerEnsureInvisBuff, pppokerEnsureMovementBuff, and meditateToManaPpp all now check Me.Hovering() at the top and return immediately when dead. These are called directly from objective step code (ensureSpeedAndInvisInNeriak, prepCityTravel, etc.) outside runBuffUpkeepTick, so the gate loop hover checks did not protect them. Result: invis/movement casting stops instantly on death regardless of which code path triggered it.
+-- 3.50: Correct RespawnWnd button names (verified in-game via ${EverQuest.LastMouseOver.Name}). OptionsList→RW_OptionsList, RespawnBtn→RW_SelectButton. Previous names were guesses and failed silently with "child not found". Sequence: listselect 1 (bind point, first option) then RW_SelectButton leftmouseup.
+-- 3.49: Fix respawn not firing in zone waits. waitForZoneOrFalse was calling handleDeathIfNeeded via runBuffUpkeepTick which has a 300ms rate limiter - if upkeep was called recently it returned early without checking death. Fix: forward-declare handleDeathIfNeeded (same pattern as runBuffUpkeepTick) so it can be called directly from waitForZoneOrFalse. When hovering detected, calls handleDeathIfNeeded() directly then returns false - no rate limiter, guaranteed to fire.
+-- 3.48: Fix death-while-gating loop. Three changes: (1) handleDeathIfNeeded() now calls /interrupt immediately on death detection to stop any active cast before waiting for respawn window. (2) Respawn window click changed from RSPB_STANDARD to OptionsList listselect 1 + RespawnBtn leftmouseup per MQ community pattern - RSPB_STANDARD was not reliably clicking. (3) Hover check added at top of every gate attempt loop iteration in tryGateToPoK() and tryGateToPoK_AAorSpellOnly() (AA and spell loops) - previously only waitZonedOrGateReady and waitCastClearOrZoned had hover exits but the outer for loop kept re-entering and casting again.
+-- 3.47: Dismount before zone stone travel - REVERTED. Issue self-resolved (mounted character clicked through on own); dismount was unnecessary overhead on every zone transition. New config TRAVEL_DISMOUNT_BEFORE_ZONE (default true) mirrors TRAVEL_DISMOUNT_BEFORE_GATE. prepCityTravel() now dismounts when mounted before /travelto - mounted speed causes character to overshoot and land on top of stone geometry (reported: Moors stone in PoK) instead of walking through the zone trigger. Inlined mount check (dismountIfMounted is defined later in file). Character is remounted in destination zone by poker2MountDelayInNekOrMoors / mountIfNeeded as normal.
+-- 3.46: AutoSize at script start. Extracted plugin load + /autosize commands into applyAutoSizeSettings() - called at script startup (alongside loadPPSettings/initMountList) so character and mount are sized immediately, not just at first Run click. Also called in runPreflightAfterQuestChecks as before to re-apply each run.
+-- 3.45: Gate death loop + AutoSize fix. (1) waitZonedOrGateReady now calls runBuffUpkeepTick and checks Me.Hovering - when dead, "Too Distracted to cast" caused immediate cast-fail which made the spell ready, which triggered another cast attempt, creating an infinite spam loop. Hover check exits the gate wait immediately so handleDeathIfNeeded can fire. waitCastClearOrZoned also exits on hover. (2) AutoSize commands corrected per docs.macroquest.org: two commands per type - toggle on (/autosize self on, /autosize mounts on) then set size (/autosize sizeself 3, /autosize sizemounts 3). Previous /autosize self/mount were toggle commands not size setters; size was not being applied.
+-- 3.44: Correct POK_NEK_WAYPOINT coordinate. Previous point (-561.38, 255.57) was NORTH of the tent cluster - character navd there then /travelto neriaka re-routed south through the tents anyway. New point (-612.25, 232.13) is past the tents on the east side (verified in-game heading southeast). Nav to this point then /travelto neriaka routes from a clear position past the obstacle.
+-- 3.43: Two fixes. (1) waitForZoneOrFalse now calls runBuffUpkeepTick each iteration - previously only called shouldStop() so handleDeathIfNeeded never fired during travel waits (up to 120s). Fix: check Me.Hovering before runBuffUpkeepTick; if dead, upkeep handles respawn then returns false immediately so objective retries clean instead of waiting out the full timeout. (2) AutoSize mount size added - /autosize mount 3 now runs alongside /autosize self 3 in preflight; large mounted characters were clipping vendor tent geometry in West Freeport near East FP zone line.
+-- 3.42: Death handler rewritten to use Me.Hovering. Previous approach (Me.State == "DEAD" or "HOVER" string comparison) was unreliable - Me.Hovering is the dedicated MQ TLO for the hover/corpse state (confirmed from MQ community: "True = dead hovering over corpse"). Entry check: not Me.Hovering() = return false. Wait-until-alive: loop until Me.Hovering() clears. Replaces both the original DEAD check (3.24) and the HOVER string fix (3.40).
+-- 3.40: Superseded by 3.42 - Me.State HOVER string check replaced by Me.Hovering TLO.
+-- 3.41: PoK waypoint before Neriak travel. LOC.POK_NEK_WAYPOINT = {-561.38, 255.57, -158.06} (verified in-game). travelNeriakForeignFromPokHub() now navs to this point first when in PoK before /travelto neriaka - anniversary tent geometry on the path to the Neriak stone is not in the navmesh so MQ2Nav routes through it. Waypoint clears the tent cluster cleanly. NAV_NUDGE_LOCS proximity approach (3.39) removed - replaced by this targeted fix.
+-- 3.39: Proximity nudge approach for PoK anniversary tents - replaced by LOC.POK_NEK_WAYPOINT in 3.41 (proximity detection was unreliable; hardcoded waypoint is cleaner).
 -- 3.38: Nav stuck detection in moving(). Samples Me.X/Y every 500ms while nav is active and not paused. If position unchanged more than 3 units over 3 seconds, strafes left for 500ms (/keypress strafe_left hold + release pattern from astone02) to clear geometry clip - matches the manual Ctrl+Left Arrow fix AL uses for the PoK anniversary tent area. Resets position and timer after each strafe attempt. Only fires when navigationIsActive() and not paused for buff upkeep (no false triggers during nav pause block).
 -- 3.37: Mount counts as movement buff. pppokerMovementBuffPresent() now checks Me.Mount.ID() first - keyring mounts provide speed without placing a SPA 3 spell in the buff bar, so the HasSPA[3] scan missed them entirely. Result was false "movement buff missing" warn and Worn Totem attempt every time the character was already mounted. isMounted() is defined later in the file so the check is inlined directly using the same TLO.
 -- 3.36: Apply invis before zoning into Neriak (not just after). prepCityTravel now accepts the destination zoneId and applies ensureInvisIfNeeded before /travelto when destination is NERIAK_A or NERIAK_B and TRAVEL_INVIS_BEFORE_NERIAK is true. Previously invis was only applied inside ensureSpeedAndInvisInNeriak after zone-in - guards at the Neriak zone line killed low-level characters before invis could land. ensureZone passes zoneId to prepCityTravel. Invis still reconfirmed after zone-in by ensureSpeedAndInvisInNeriak as before.
@@ -150,7 +166,7 @@ local stopRequested = false
 
 
 local PP = {
-    VERSION = "3.38",
+    VERSION = "3.54",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -451,6 +467,10 @@ local PP = {
         TOADSTOOL = { -148, -994, -26 },
         --- Neriak Commons: prep point for `/travelto neriaka` after Toadstool (runners / reliable navmesh to Foreign).
         TOADSTOOL_RUNNER_PRE_NERIAKA = { 3.53, -464.07, -10.81 },
+        --- PoK safe waypoint before Neriak stone - clears anniversary tent geometry not in navmesh.
+        --- Nav here first before /travelto neriaka to avoid getting stuck. Verified in-game.
+        --- Must be PAST (south of) the tent cluster, not in front of it. -612.25 is past it, east side.
+        POK_NEK_WAYPOINT = { -612.25, 232.13, -157.18 },
         QUINN = { 454, -620, 22 },
         LUMBER_1 = { -442, -215, -12 },
         LUMBER_2 = { -426, -263, -12 },
@@ -533,6 +553,7 @@ PP.PIC_TEST_BAR_OPTS = {
 local debugLog
 local warn
 local runBuffUpkeepTick
+local handleDeathIfNeeded
 
 local function getImVec2(x, y)
     if imgui.ImVec2 then
@@ -1447,6 +1468,12 @@ local function waitForZoneOrFalse(zoneId, timeoutMs)
     local t0 = mq.gettime()
     while mq.TLO.Zone.ID() ~= zoneId do
         shouldStop()
+        local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+        if okH and hov then
+            handleDeathIfNeeded()  -- direct call bypasses runBuffUpkeepTick rate limiter
+            return false           -- exit zone wait; objective retries after respawn
+        end
+        runBuffUpkeepTick("zone wait")
         mq.delay(500)
         if mq.gettime() - t0 > timeoutMs then
             return false
@@ -1830,6 +1857,8 @@ local function findFreeGemSlotPpp()
 end
 
 local function meditateToManaPpp(requiredMana)
+    local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+    if okH and hov then return end
     requiredMana = requiredMana or 40
     if (mq.TLO.Me.CurrentMana() or 0) >= requiredMana then return end
     -- Med to 50% max mana as safety buffer - avoids repeated sit/stand cycles for each
@@ -1857,34 +1886,42 @@ end
 --- Detect death and click standard respawn (bind point). Returns true if the character
 --- was dead and has now respawned. Called from runBuffUpkeepTick so it fires during
 --- any navigation or objective-wait loop without needing a dedicated poller.
-local function handleDeathIfNeeded()
-    local ok, state = pcall(function() return mq.TLO.Me.State() end)
-    if not ok or not state or state ~= "DEAD" then return false end
-    warn("Character is dead - waiting for respawn window...")
-    local t0 = mq.gettime()
-    while not mq.TLO.Window("RespawnWnd").Open() do
-        shouldStop()
-        if mq.gettime() - t0 > 30000 then
-            warn("Respawn window did not appear after 30s.")
-            return false
+handleDeathIfNeeded = function()
+    local ok, hovering = pcall(function() return mq.TLO.Me.Hovering() end)
+    if not ok or not hovering then return false end
+    warn("Character is dead - clicking respawn...")
+    -- Interrupt any active cast immediately
+    pcall(function()
+        if mq.TLO.Me.Casting() then
+            mq.cmd("/interrupt")
+            mq.delay(200)
         end
-        mq.delay(500)
+    end)
+    -- Click immediately - RespawnWnd is open when Me.Hovering() is true.
+    -- Retry every second until hovering clears (first click may not register).
+    local function clickRespawn()
+        if mq.TLO.Window("RespawnWnd").Open() then
+            mq.cmd('/notify RespawnWnd RW_OptionsList listselect 1')
+            mq.delay(100)
+            mq.cmd('/notify RespawnWnd RW_SelectButton leftmouseup')
+            return true
+        end
+        return false
     end
-    info("Clicking standard respawn (bind point)...")
-    mq.cmd('/notify RespawnWnd RSPB_STANDARD leftmouseup')
-    -- Wait until no longer dead (zone transition + state change)
+    clickRespawn()
     local t1 = mq.gettime()
     while true do
         shouldStop()
-        local ok2, st2 = pcall(function() return mq.TLO.Me.State() end)
-        if not ok2 or not st2 or st2 ~= "DEAD" then break end
+        local ok2, hov2 = pcall(function() return mq.TLO.Me.Hovering() end)
+        if not ok2 or not hov2 then break end
         if mq.gettime() - t1 > 60000 then
-            warn("Still dead after 60s - continuing anyway.")
+            warn("Still hovering after 60s - continuing anyway.")
             break
         end
-        mq.delay(500)
+        clickRespawn()
+        mq.delay(1000)
     end
-    mq.delay(2000)  -- settle after zone-in
+    mq.delay(2000)
     info("Respawned - resuming run.")
     return true
 end
@@ -2104,6 +2141,8 @@ local function pppokerApplyMovementClassBuff()
 end
 
 local function pppokerEnsureMovementBuff(allowSpellCast)
+    local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+    if okH and hov then return false, nil end
     if allowSpellCast == nil then allowSpellCast = true end
     local hasM, which = pppokerMovementBuffPresent()
     if hasM then return true, which end
@@ -2599,6 +2638,8 @@ local function removeLevitationBuffsIfPresent()
 end
 
 local function pppokerEnsureInvisBuff(allowSpellCast)
+    local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+    if okH and hov then return false, nil end
     if allowSpellCast == nil then allowSpellCast = true end
     local ok, which = pppokerInvisBuffPresent()
     if ok then return true, which end
@@ -2724,6 +2765,28 @@ local function prepCityTravel(whereLabel, zoneId)
     whereLabel = whereLabel or "city zone"
     local needsPreInvis = tonumber(zoneId or 0) == PP.ZONE.NERIAK_A
         or tonumber(zoneId or 0) == PP.ZONE.NERIAK_B
+    -- PoK -> Neriak: nav to safe waypoint before /travelto to bypass anniversary tent geometry.
+    -- Covers all ensureZone(NERIAK_A) callers (not just travelNeriakForeignFromPokHub).
+    if tonumber(zoneId or 0) == PP.ZONE.NERIAK_A
+        and mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+        and PP.LOC.POK_NEK_WAYPOINT then
+        local wp = PP.LOC.POK_NEK_WAYPOINT
+        debugLogQuiet("PoK - nav to waypoint before Neriak stone (tent bypass).")
+        mq.cmdf('/squelch /nav locyxz %.2f %.2f %.2f', wp[1], wp[2], wp[3])
+        local t0wp = mq.gettime()
+        while mq.gettime() - t0wp < 20000 do
+            shouldStop()
+            local okW, my, mx = pcall(function() return mq.TLO.Me.Y(), mq.TLO.Me.X() end)
+            if okW and my and mx then
+                local dy, dx = (my or 0) - wp[1], (mx or 0) - wp[2]
+                if math.sqrt(dx * dx + dy * dy) <= 20 then
+                    mq.cmd('/squelch /nav stop')
+                    break
+                end
+            end
+            mq.delay(250)
+        end
+    end
     debugLogQuiet("prep for " .. whereLabel .. " - movement speed" .. (needsPreInvis and " + invis before zone-in." or " only."))
     local movOk, movDetail = pppokerEnsureMovementBuff()
     if movOk then
@@ -3089,6 +3152,9 @@ local function waitZonedOrGateReady(checkReadyFn, zoneId, maxMs)
     local t0 = mq.gettime()
     while mq.gettime() - t0 < maxMs do
         shouldStop()
+        runBuffUpkeepTick("gate wait")
+        local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+        if okH and hov then return false end  -- dead; exit gate loop, let death handler take over
         if mq.TLO.Zone.ID() == zoneId then
             return true
         end
@@ -3106,6 +3172,8 @@ local function waitCastClearOrZoned(targetZoneId, maxMs)
     local t0 = mq.gettime()
     while mq.gettime() - t0 < maxMs do
         shouldStop()
+        local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+        if okH and hov then return false end  -- dead; stop waiting on cast result
         if mq.TLO.Zone.ID() == targetZoneId then
             return true
         end
@@ -3274,6 +3342,8 @@ local function tryGateToPoK_AAorSpellOnly()
     if hasGateAA() then
         for attempt = 1, maxAttempts do
             shouldStop()
+            local okH3, hov3 = pcall(function() return mq.TLO.Me.Hovering() end)
+            if okH3 and hov3 then return false end
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
                 return true
             end
@@ -3308,6 +3378,8 @@ local function tryGateToPoK_AAorSpellOnly()
         local gateSpellMana = math.max(40, tonumber(mq.TLO.Spell(spellName).Mana() or 0) or 0)
         for attempt = 1, maxAttempts do
             shouldStop()
+            local okH4, hov4 = pcall(function() return mq.TLO.Me.Hovering() end)
+            if okH4 and hov4 then return false end
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
                 return true
             end
@@ -3454,6 +3526,8 @@ local function tryGateToPoK()
     if canAA then
         for attempt = 1, maxAttempts do
             shouldStop()
+            local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
+            if okH and hov then return false end
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
                 return true
             end
@@ -3496,6 +3570,8 @@ local function tryGateToPoK()
         local gateSpellMana = math.max(40, tonumber(mq.TLO.Spell(spellName).Mana() or 0) or 0)
         for attempt = 1, maxAttempts do
             shouldStop()
+            local okH2, hov2 = pcall(function() return mq.TLO.Me.Hovering() end)
+            if okH2 and hov2 then return false end
             if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
                 return true
             end
@@ -3588,9 +3664,24 @@ local function tryGateDirectOrPokFallback(directTravelArg, directZoneId, directL
     return tryGateToPoKOrTraveltoPok()
 end
 
---- After Run passes journal checks: speed, mount, Zueria snapshot, AutoSize self 3. No invis here - apply invis in prepBeforeTasselLeg / zone helpers.
+--- Load MQ2AutoSize if needed and apply consistent sizing. Called at script start and each preflight.
+local function applyAutoSizeSettings()
+    local ok, loaded = pcall(function() return mq.TLO.Plugin("MQ2AutoSize").IsLoaded() end)
+    if not (ok and loaded) then
+        info("Loading MQ2AutoSize...")
+        mq.cmd("/plugin MQ2AutoSize")
+        mq.delay(500)
+    end
+    mq.cmd("/autosize on")
+    mq.cmd("/autosize self on")
+    mq.cmd("/autosize sizeself 3")
+    mq.cmd("/autosize mounts on")
+    mq.cmd("/autosize sizemounts 3")
+end
+
+--- After Run passes journal checks: speed, mount, Zueria snapshot, AutoSize. No invis here - apply invis in prepBeforeTasselLeg / zone helpers.
 local function runPreflightAfterQuestChecks()
-    debugLogQuiet("preflight - speed, mount, Zueria Slide check, MQ2AutoSize self 3 (no invis; invis last per leg).")
+    debugLogQuiet("preflight - speed, mount, Zueria Slide check, MQ2AutoSize sizeself 3 + sizemounts 3 (no invis; invis last per leg).")
     pppokerEnsureMovementBuff()
     mountIfNeeded()
     if PP.pppokerZueria and PP.pppokerZueria.refreshReadiness then
@@ -3599,14 +3690,7 @@ local function runPreflightAfterQuestChecks()
             info(zs.summary)
         end
     end
-    local ok, loaded = pcall(function() return mq.TLO.Plugin("MQ2AutoSize").IsLoaded() end)
-    if not (ok and loaded) then
-        info("Loading MQ2AutoSize...")
-        mq.cmd("/plugin MQ2AutoSize")
-        mq.delay(500)
-    end
-    -- Set a consistent self model size for the run. Mount size left to your AutoSize config.
-    mq.cmd("/autosize self 3")
+    applyAutoSizeSettings()
 end
 
 --- Movement + invis once we are in Neriak Foreign or Commons (zoned in or resumed already there). Dismount first so speed/invis cast on foot; mount keyring not used in Neriak (see mountIfNeeded).
@@ -3672,6 +3756,11 @@ local function travelNeriakForeignFromPokHub()
     if mq.TLO.Zone.ID() == PP.ZONE.NERIAK_A then
         ensureSpeedAndInvisInNeriak("Neriak Foreign (already in zone)")
         return
+    end
+    -- Nav to safe waypoint first when in PoK - anniversary tent geometry not in navmesh blocks the direct path to the Neriak stone.
+    if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID and PP.LOC.POK_NEK_WAYPOINT then
+        debugLogQuiet("PoK - nav to waypoint before Neriak stone (anniversary tent bypass).")
+        navLoc(PP.LOC.POK_NEK_WAYPOINT, 1200)
     end
     local zoned = false
     for attempt = 1, 3 do
@@ -4240,6 +4329,12 @@ local function waitObjectiveDone(taskName, idx, timeoutMs)
     local nextSync = t0
     while mq.gettime() - t0 < timeoutMs do
         shouldStop()
+        -- Direct death check - bypasses runBuffUpkeepTick rate limiter, same pattern as waitForZoneOrFalse
+        local okHW, hovW = pcall(function() return mq.TLO.Me.Hovering() end)
+        if okHW and hovW then
+            handleDeathIfNeeded()
+            return false  -- exit wait; objective retries after respawn
+        end
         runBuffUpkeepTick("wait objective")
         if journalSyncMode() ~= "open_once_no_fetch"
             and PP.WAIT_JOURNAL_SYNC_MS and PP.WAIT_JOURNAL_SYNC_MS > 0
@@ -5145,6 +5240,7 @@ end
 
 loadPPSettings()
 initMountList()
+applyAutoSizeSettings()
 mq.imgui.init("PPPokerGUIV2", drawGUI)
 
 _G.PPPokerV2 = _G.PPPokerV2 or {}
