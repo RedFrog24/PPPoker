@@ -4,6 +4,10 @@
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
 -- Version controlled by PP.VERSION (single source of truth - drives window title and run popup).
 -- Changelog:
+-- 3.64: Fix 200-local limit. buyFromMiraoItem, characterHasGateAbility, characterHasInvisAbility moved inside runMiraoPurchaseIfNeeded as inner locals - inner function locals don't count against the 200-module-local LuaJIT limit. Freed 3 module locals.
+-- 3.63: Invis config audit (all classes verified in-game and EQResource). (1) BRD INVIS_CLASS_BUFFS: removed "Selo's Song of Travel" - movement song only, was causing false "has invis" detection when Selo's was active. Shauri's Sonorous Clouding is the only BRD invis song. (2) INVIS_GROUP_AA_NAMES: kept "Group Perfected Invisibility" - in-game name confirmed by AL (EQResource listed wrong name "Group Perfect Invisibility"). Added ID 1210 to INVIS_GROUP_AA_IDS. (3) INVIS_SELF_AA_NAMES: removed "Improved Invisibility" and "Invisibility" (spell names not AA names). Cloak of Shadows ID 531 confirmed for NEC/SHD (living invis). Innate Camouflage ID 80 for DRU/RNG.
+-- 3.62: Mirao purchase now checks class capabilities before buying. characterHasGateAbility() skips Vial if character has Gate AA or Gate spell. characterHasInvisAbility() skips Cloudy Potions if character has invis class spell, any trained invis AA, or is ROG (Sneak/Hide). Casters never visit Mirao for items they already have.
+-- 3.61: Mirao Frostpouch purchase pipeline. When in PoK, automatically buys Vial of Swirling Smoke (gate, LORE, ~1082pp) if not in bags and Cloudy Potions (invis, ~11pp each) up to MIRAO.INVIS_POTION_MIN (default 10). Shows cost breakdown and checks plat before buying. Fires at preflight and at every PoK arrival via travelNeriakForeignFromPokHub. Config: PP.MIRAO.BUY_GATE_POTION, BUY_INVIS_POTION, INVIS_POTION_MIN. LOC.MIRAO and NPC.MIRAO added (verified in-game). Window children confirmed via EverQuest.LastMouseOver.Name: MerchantWnd + QuantityWnd sequence; also added to CLAUDE.md known window elements.
 -- 3.60: Fix double BST invis AA fire. aaReadyById() returned true when Me.AltAbilityReady[id] returned nil (character does not have that AA) - this caused /alt act to fire for IDs the character never trained. Fix: default changed true→false (unknown = not ready). BST IDs removed from INVIS_SELF_AA_IDS - name path (pppokerInvisAAId via Me.AltAbility(name).ID()) correctly returns 0 for untrained AAs and skips them cleanly. BST invis AAs remain in INVIS_SELF_AA_NAMES where they work correctly.
 -- 3.59: Movement buff + remount after gate fails in direct-travel paths. (1) tryGateDirectOrPokFallback() now calls pppokerEnsureMovementBuff() + mountIfNeeded() after gate fails, before /travelto - covers Highpass→NQ runner path and any other direct travelto fallback. mountIfNeeded() is a no-op in Highpass (TRAVEL_NO_MOUNT_IN_HIGHPASS=true) but ensures mount in other zones. (2) leaveHighpassTowardNorthQeynos() calls pppokerEnsureMovementBuff() at the safe gate spot before gate attempts - runners get SoW/Totem applied while clear of NPC clusters before the /travelto qeynos2 run.
 -- 3.58: Remount after failed gate before /travelto poknowledge. tryGateToPoK() calls dismountIfMounted("Gate") at the start - when gate is unavailable the character is left on foot and /travelto poknowledge runs dismounted. Fix: pppokerEnsureMovementBuff() + mountIfNeeded() added inside tryGateToPoKOrTraveltoPok() after gate fails, before the /travelto command. Applies to all callers (Betty runner path, obj 13/16 fallbacks, etc.).
@@ -38,11 +42,11 @@
 -- 3.29: Remove pppokerUseWornTotemIfAvailable and PP.WORN_TOTEM config key. Worn Totem was handled by both a dedicated function (hardcoded legacy) and the MOVEMENT_ITEM_NAMES list - two code paths with different wait times (12s vs 6s). Now handled exclusively by pppokerUseMovementItemList like any other movement item. All movement items use the same reuse check and wait time.
 -- 3.28: Movement item reuse check. pppokerUseWornTotemIfAvailable and pppokerUseMovementItemList now check itemClickReuseReady before clicking, matching the existing invis item behavior. New config MOVEMENT_SKIP_ITEM_IF_NOT_READY (default true) mirrors INVIS_SKIP_ITEM_IF_NOT_READY - when item is on cooldown, skip it this tick instead of clicking a dead item. Prevents Worn Totem from dropping invis for a failed/no-op click.
 -- 3.27: Level check before memspell in both pppokerApplyMovementClassBuff and pppokerApplyInvisClassBuff. Previously only checked Spell.ID() > 0 (valid game spell) with no level gate - a level 12 NEC would attempt to memorize "Skin of the Shadow" (level 55) instead of skipping to "Gather Shadows" (level 7). Fix: read Spell.ClassLevel(class) and compare to Me.Level() before attempting memspell; log skip at debugLogQuiet level. Applies to both movement and invis spell pipelines.
--- 3.26: Unified buff application block in runBuffUpkeepTick. Worn Totem and invis are now both fixed for navigation: compute needMovement + needInvis upfront, then one combined nav-pause block (/nav pause + 200ms) when either is needed, apply movement first then invis (both with allowSpellCast=true since nav is paused), single /nav pause off afterward. invisApplyingNow renamed buffsApplyingNow to reflect it guards both. INVIS_REFRESH_MIN_TICKS_REMAINING default changed from 0 to 8 (48s proactive refresh) - script now proactively recasts invis before it expires rather than only reacting after it drops.
+-- 3.26: Unified buff application block in runBuffUpkeepTick. Worn Totem and invis are now both fixed for navigation: compute needMovement + needInvis upfront, then one combined nav-pause block (/nav pause + 200ms) when either is needed, apply movement first then invis (both with allowSpellCast=true since nav is paused), single /nav pause off afterward. invisApplyingNow renamed gui.buffsApplyingNow to reflect it guards both. INVIS_REFRESH_MIN_TICKS_REMAINING default changed from 0 to 8 (48s proactive refresh) - script now proactively recasts invis before it expires rather than only reacting after it drops.
 -- 3.25: Fix invis-not-recast and no-50%-med during navigation. Root cause: allowSpellCast=false during navMoving blocked pppokerApplyInvisClassBuff entirely - so pppokerEnsureInvisBuff returned without casting, and meditateToManaPpp (inside the spell path) was never reached. Fix: upkeep invis section now pauses nav (/nav pause + 200ms), applies invis with allowSpellCast=true so spell+med path is reachable, then resumes nav (/nav pause off). invisApplyingNow guard prevents upkeep re-entry while the cast is in progress (cast can take several seconds). meditateToManaPpp MaxMana read wrapped in pcall for safety. removeLevitationBuffsIfPresent() called in both needInvis and !needInvis paths.
 -- 3.24: Med safety buffer + death respawn. meditateToManaPpp now meds to max(requiredMana, 50% of MaxMana) instead of just requiredMana - avoids repeated sit/stand for each subsequent cast (invis refresh, re-gate) during a run leg; log shows need/have/target. handleDeathIfNeeded(): detects Me.State=="DEAD", waits for RespawnWnd, clicks RSPB_STANDARD (bind point), waits until no longer dead + 2s settle, returns true. Wired into runBuffUpkeepTick (fires every 300ms during navigation and objective waits); returns early after respawn so buff checks run clean on the next tick. shouldStop() honored inside all wait loops.
 -- 3.23: Upkeep invis-before-movement guard. runBuffUpkeepTick now reads invis state before the movement buff check. If invis is currently up and movement buff expired, movement re-application is skipped - clicking a movement item (Worn Totem, etc.) or casting a movement spell always drops invis in EQ. Character stays hidden; movement is re-applied on the next tick after invis naturally drops (which then fires the normal movement-first, invis-last sequence). Zone-entry helpers (ensureSpeedAndInvisInNeriak, Qeynos, Highpass) are unaffected - they explicitly apply movement before invis and are not in the upkeep path.
--- 3.22: Two latent fixes from code review. (1) warn forward decl - loadTextures referenced warn before its local definition; added local warn to forward-decl block and changed local function warn to assignment so it shares the same upvalue. Without this, any atlas/texture load failure would call nil and crash (never triggered because textures load cleanly, but the bug was real). (2) paintingsTaskSlot cache - getPaintingsTaskSlotNumber scanned up to 30 tasks on every objectiveCompleteFromParse call, which is called 16x per progress refresh (up to 480 TLO reads). Cache set on first successful scan, reset at runQuest start in case task was dropped/re-acquired between runs.
+-- 3.22: Two latent fixes from code review. (1) warn forward decl - loadTextures referenced warn before its local definition; added local warn to forward-decl block and changed local function warn to assignment so it shares the same upvalue. Without this, any atlas/texture load failure would call nil and crash (never triggered because textures load cleanly, but the bug was real). (2) gui.paintingsTaskSlot cache - getPaintingsTaskSlotNumber scanned up to 30 tasks on every objectiveCompleteFromParse call, which is called 16x per progress refresh (up to 480 TLO reads). Cache set on first successful scan, reset at runQuest start in case task was dropped/re-acquired between runs.
 -- 3.21: Gate spell mana check - meditateToManaPpp(gateSpellMana) added before each /cast attempt in both tryGateToPoK_AAorSpellOnly() and tryGateToPoK(). Mana cost read once via mq.TLO.Spell(spellName).Mana() before the loop (math.max 40 floor, same pattern as movement/invis buff functions). Gate AA path unchanged - AAs do not use mana. Fixes low-level casters silently failing Gate casts after spending mana on invis.
 -- 3.20: Gate retry - gem-ready polling. Added waitZonedOrGateReady(checkReadyFn, zoneId, maxMs): polls every GATE_READY_POLL_MS (250ms) and exits early when the gate ability/gem/item becomes ready again (fizzle/collapse resolved) instead of sitting out the full GATE_ZONE_WAIT_MS (90s cap). Applied to all four gate-cast paths: AA and spell in tryGateToPoK_AAorSpellOnly(), AA and spell in tryGateToPoK(), Drunkard's Stein in tryGateSteinToPoK(), and philters/potions in tryGatePotionsClickiesToPoK(). Typical collapse/fizzle wait drops from ~90s to ~3-5s. Updated warn messages in tryGateToPoK() AA/spell loops (was "waiting for AA again" - now "collapse/fizzle; retrying"). GATE_ZONE_WAIT_MS (90s) remains as safety cap; no config changes needed.
 -- 3.19: Low-level Highpass safe gate (Option A). HIGHPASS_SAFE_GATE_LEVEL (default 40) - if Me.Level < threshold, nav to LOC.HIGHPASS_SAFE_GATE (outside Tiger room, no NPC clusters) before gate ladder runs in leaveHighpassTowardNorthQeynos. Character is still invis during nav; gate drops invis away from guards. Set HIGHPASS_SAFE_GATE_LEVEL=0 to disable. LOC.HIGHPASS_SAFE_GATE = { -78.13, 625.50, -18.68 } (verified in-game, heading WSW from Tiger room).
@@ -172,7 +176,7 @@ local stopRequested = false
 
 
 local PP = {
-    VERSION = "3.60",
+    VERSION = "3.64",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -321,10 +325,9 @@ local PP = {
         CLR = {},
         --- BST has no gem invis spells - invis via Natural Invisibility AA line only (IDs 980/8301). See INVIS_SELF_AA_NAMES.
         BST = {},
-        --- Level 19 song then 51 travel song (group invis + utilities). Ranks may read as "Shauri's Sonorous Clouding II" in book - add rank-specific names if MQ buff name differs.
+        --- Shauri's Sonorous Clouding is the BRD group invis song. Selo's Song of Travel is movement only - it is in MOVEMENT_CLASS_BUFFS, NOT here.
         BRD = {
             "Shauri's Sonorous Clouding",
-            "Selo's Song of Travel",
         },
         --- Druids have no standard Invisibility spell. Camouflage line only. Best→fallback: Improved Superior Camo (Lv 48, Improved Invis - won't break on movement), Superior Camo (Lv 18), base Camo (Lv 4). Script uses first one found in spellbook.
         DRU = { "Improved Superior Camouflage", "Superior Camouflage", "Camouflage" },
@@ -335,33 +338,37 @@ local PP = {
         NEC = { "Skin of the Shadow", "Gather Shadows" },
         --- Rangers: Superior Camouflage (Lv 47) preferred; base Camouflage (Lv 14) fallback.
         RNG = { "Superior Camouflage", "Camouflage" },
-        SHM = { "Invisibility" },
+        --- Spirit Veil (SHM/67, 10 min standard invis) preferred; base Invisibility fallback for lower levels.
+        SHM = { "Spirit Veil", "Invisibility" },
         WIZ = { "Superior Invisibility", "Improved Invisibility", "Invisibility" },
     },
     INVIS_SELF_AA_NAMES = {
+        --- ENC/MAG/WIZ: Perfected Invisibility AA (ID 3812 per EQResource).
         "Perfected Invisibility",
-        "Improved Invisibility",
-        "Invisibility",
-        --- Necro (and similar): rank 1+ gives living invis; skipped on other classes (no AA id).
+        --- NEC/SHD: Cloak of Shadows AA (ID 531 per EQResource) - living invis. AltAbility returns 0 on other classes.
         "Cloak of Shadows",
-        --- DRU/RNG: Alt Act ID 80 per EQ Resource. AltAbility lookup returns 0 for classes without it - exits cleanly.
+        --- DRU/RNG: Innate Camouflage AA (ID 80 per EQResource). AltAbility returns 0 on other classes.
         "Innate Camouflage",
-        --- BST: Natural Invisibility AA line (Improved Invis effect). AltAbility returns 0 on non-BST - exits cleanly.
+        --- BST: Natural Invisibility AA line (IDs 980/8301 per EQResource). AltAbility returns 0 on other classes.
         "Perfected Natural Invisibility",
         "Improved Natural Invisibility",
         "Natural Invisibility",
+        --- SHM: Silent Presence AA line (ID 3730 per EQResource). Perfected rank tried first (higher rank preferred). AltAbility returns 0 on other classes.
+        "Perfected Silent Presence",
+        "Silent Presence",
     },
     --- Preferred invis AA ids (Live-first). Used before AA-name fallback.
     --- BST invis AAs use the name path (INVIS_SELF_AA_NAMES) - Me.AltAbility(name).ID() correctly returns 0 for AAs the character doesn't have. ID path had a bug where unknown IDs returned true and fired anyway.
     INVIS_SELF_AA_IDS = {},
-    INVIS_GROUP_AA_IDS = {},
+    --- Group Perfected Invisibility ID 1210 (ENC/MAG/WIZ). NOT adding Group Perfected Invisibility to Undead (ID 280) - IVU does not work on living guards in Neriak/Qeynos/Highpass.
+    INVIS_GROUP_AA_IDS = { 1210 },
     INVIS_GROUP_AA_NAMES = {
-        "Group Invisibility",
-        "Mass Invisibility",
+        --- ENC/MAG/WIZ: verified in-game name. (IVU equivalent is "Group Perfected Invisibility To Undead" ID 280 - not used here, wrong type for this quest.)
         "Group Perfected Invisibility",
-        "Mass Group Invisibility",
-        --- DRU/RNG group camo AA: Alt Act ID 518 per EQ Resource.
+        --- DRU/RNG group camo AA: Alt Act ID 518 per EQResource.
         "Shared Camouflage",
+        --- SHM: Group Perfected Silent Presence (separate group invis AA). AltAbility returns 0 on other classes.
+        "Group Perfected Silent Presence",
     },
     --- Bard group invis AA: **Alt Act ID 231** per EQ Resource `articles.eqresource.com/altactlist.php` (Bard section lists it as "Shauri's Sonorious Clouding" - site typo; in-game name below).
     INVIS_BRD_AA_IDS = { 231 },
@@ -469,6 +476,20 @@ local PP = {
         BETTY = { "Bluffing Betty", "Bluffing" },
         QUINN = { "Quinn of Quads", "Quads" },
         MHRAI = { "Mhrai, Queen of Tails", "Queen", "Mhrai" },
+        MIRAO = { "Mirao Frostpouch" },
+    },
+
+    --- Mirao Frostpouch vendor (PoK) - buys gate/invis potions when in PoK.
+    MIRAO = {
+        --- Buy Vial of Swirling Smoke (gate potion, LORE) when not in bags. ~1082pp.
+        BUY_GATE_POTION = true,
+        GATE_POTION_NAME = "Vial of Swirling Smoke",
+        GATE_POTION_COST = 1082,
+        --- Buy Cloudy Potions (invis, stackable) up to this count. ~11pp each.
+        BUY_INVIS_POTION = true,
+        INVIS_POTION_NAME = "Cloudy Potion",
+        INVIS_POTION_MIN = 10,
+        INVIS_POTION_COST = 11,
     },
 
     LOC = {
@@ -481,6 +502,8 @@ local PP = {
         TOADSTOOL = { -148, -994, -26 },
         --- Neriak Commons: prep point for `/travelto neriaka` after Toadstool (runners / reliable navmesh to Foreign).
         TOADSTOOL_RUNNER_PRE_NERIAKA = { 3.53, -464.07, -10.81 },
+        --- Mirao Frostpouch vendor in PoK (verified in-game).
+        MIRAO = { -82.25, -205.85, -157.90 },
         --- PoK safe waypoint before Neriak stone - clears anniversary tent geometry not in navmesh.
         --- Nav here first before /travelto neriaka to avoid getting stuck. Verified in-game.
         --- Must be PAST (south of) the tent cluster, not in front of it. -612.25 is past it, east side.
@@ -534,6 +557,10 @@ local gui = {
     shimmerState = {},
     --- Commemorative coin icon texture (loaded once).
     commIconTex = nil,
+    --- Cached task slot index - reset at run start; avoids rescanning tasks per objective check.
+    paintingsTaskSlot = nil,
+    --- Guard: prevents runBuffUpkeepTick re-entry while buffs are being applied.
+    buffsApplyingNow = false,
     --- Mount picker: saved settings table (loaded from pickle on startup).
     ppSettings = {},
     --- Mount picker: keyring entries { name, slot, levitates } populated at startup.
@@ -2069,6 +2096,12 @@ local function pppokerApplyMovementViaAA()
     return false, nil
 end
 
+--- True when character has an active shroud applied (Me.Shrouded TLO). Shrouded chars cannot use mounts, items, or class spells.
+local function isShrouded()
+    local ok, v = pcall(function() return mq.TLO.Me.Shrouded() end)
+    return ok and v == true
+end
+
 local function pppokerUseMovementItemList()
     local items = PP.MOVEMENT_ITEM_NAMES or {}
     for _, item in ipairs(items) do
@@ -2157,6 +2190,10 @@ end
 local function pppokerEnsureMovementBuff(allowSpellCast)
     local okH, hov = pcall(function() return mq.TLO.Me.Hovering() end)
     if okH and hov then return false, nil end
+    if isShrouded() then
+        debugLogQuiet("pppokerEnsureMovementBuff: shrouded - skipping (no mount/item/spell available).")
+        return false, nil
+    end
     if allowSpellCast == nil then allowSpellCast = true end
     local hasM, which = pppokerMovementBuffPresent()
     if hasM then return true, which end
@@ -2738,9 +2775,9 @@ runBuffUpkeepTick = function(contextLabel)
         local minT = tonumber(PP.INVIS_REFRESH_MIN_TICKS_REMAINING) or 0
         needInvis = not invOk or (invOk and minT > 0 and pppokerInvisFadingBelowTicks(minT))
     end
-    if (needMovement or needInvis) and not buffsApplyingNow then
+    if (needMovement or needInvis) and not gui.buffsApplyingNow then
         -- Pause nav so MQ2Nav stops sending movement commands that interrupt spell/item casts.
-        buffsApplyingNow = true
+        gui.buffsApplyingNow = true
         if navMoving then
             mq.cmd('/nav pause')
             mq.delay(200)
@@ -2760,7 +2797,7 @@ runBuffUpkeepTick = function(contextLabel)
         if navMoving then
             mq.cmd('/nav pause off')
         end
-        buffsApplyingNow = false
+        gui.buffsApplyingNow = false
     else
         removeLevitationBuffsIfPresent()
     end
@@ -2833,6 +2870,7 @@ local function isMounted()
     return ok and tonumber(mountID or 0) > 0
 end
 
+
 local function classIsBard()
     local ok, short = pcall(function() return mq.TLO.Me.Class.ShortName() end)
     if not ok or not short then return false end
@@ -2854,6 +2892,10 @@ end
 
 local function mountIfNeeded()
     if not PP.TRAVEL_MOUNT_BEFORE_NAV then return false end
+    if isShrouded() then
+        debugLogQuiet("mountIfNeeded: shrouded - skipping mount.")
+        return false
+    end
     local zid = mq.TLO.Zone.ID()
     if PP.TRAVEL_NO_MOUNT_IN_NERIAK ~= false then
         if zid == PP.ZONE.NERIAK_A or zid == PP.ZONE.NERIAK_B then
@@ -3005,6 +3047,116 @@ local function waitNearLocYXZ(loc, maxDist, timeoutMs)
     return false
 end
 
+local function hasGateAA()
+    local ok, id = pcall(function() return mq.TLO.Me.AltAbility("Gate").ID() end)
+    return ok and tonumber(id or 0) > 0
+end
+
+local function hasGateSpell()
+    local name = PP.GATE_SPELL_NAME or "Gate"
+    local ok, has = pcall(function()
+        local s = mq.TLO.Me.Spell(name)
+        return s and s()
+    end)
+    return ok and has
+end
+
+-- Mirao Purchase Pipeline
+
+local function runMiraoPurchaseIfNeeded()
+    if mq.TLO.Zone.ID() ~= PP.GATE_ZONE_ID then return end
+    local m = PP.MIRAO
+    if not m then return end
+    -- Inner helpers - defined here so they don't consume module-level locals
+    local function buyFromMiraoItem(itemName, qty, costEach)
+        mq.cmd('/notify MerchantWnd MW_ItemNameInput leftmouseup')
+        mq.delay(100)
+        mq.cmdf('/notify MerchantWnd MW_ItemNameInput settext "%s"', itemName)
+        mq.delay(100)
+        mq.cmd('/notify MerchantWnd MW_SearchItem_Button leftmouseup')
+        mq.delay(800)
+        mq.cmd('/notify MerchantWnd MW_ItemList listselect 1')
+        mq.delay(200)
+        mq.cmd('/notify MerchantWnd MW_Buy_Button leftmouseup')
+        mq.delay(400)
+        if not mq.TLO.Window("QuantityWnd").Open() then
+            warn(string.format("Mirao: QuantityWnd did not open buying %s.", itemName))
+            return false
+        end
+        mq.cmdf('/notify QuantityWnd QTYW_SliderInput settext "%d"', qty)
+        mq.delay(100)
+        mq.cmd('/notify QuantityWnd QTYW_Accept_Button leftmouseup')
+        mq.delay(500)
+        info(string.format("Mirao: bought %dx %s (~%dpp).", qty, itemName, qty * costEach))
+        return true
+    end
+    local function characterHasGateAbility()
+        return hasGateAA() or hasGateSpell()
+    end
+    local function characterHasInvisAbility()
+        local class = (mq.TLO.Me.Class.ShortName() or ""):upper()
+        if class == "ROG" then return true end
+        local spells = PP.INVIS_CLASS_BUFFS[class]
+        if spells and #spells > 0 then return true end
+        for _, name in ipairs(PP.INVIS_SELF_AA_NAMES or {}) do
+            local ok, id = pcall(function()
+                local a = mq.TLO.Me.AltAbility(name)
+                if type(a) == "function" then a = a() end
+                if not a then return 0 end
+                return tonumber(a.ID() or 0) or 0
+            end)
+            if ok and id and id > 0 then return true end
+        end
+        return false
+    end
+    -- Only buy what the character can't do themselves
+    local needVial = m.BUY_GATE_POTION
+        and not characterHasGateAbility()
+        and not mq.TLO.FindItem(m.GATE_POTION_NAME)()
+    local currentCloudy = tonumber(mq.TLO.FindItem(m.INVIS_POTION_NAME).Stack() or 0) or 0
+    local needCloudy = m.BUY_INVIS_POTION
+        and not characterHasInvisAbility()
+        and currentCloudy < (m.INVIS_POTION_MIN or 10)
+    local cloudyToBuy = needCloudy and math.max(0, (m.INVIS_POTION_MIN or 10) - currentCloudy) or 0
+    if not needVial and not needCloudy then return end
+    -- Cost warning
+    local totalCost = (needVial and (m.GATE_POTION_COST or 1082) or 0)
+        + (cloudyToBuy * (m.INVIS_POTION_COST or 11))
+    info(string.format("Mirao: buying%s%s - ~%dpp total.",
+        needVial and string.format(" 1x %s (~%dpp)", m.GATE_POTION_NAME, m.GATE_POTION_COST or 1082) or "",
+        needCloudy and string.format(" %dx %s (~%dpp)", cloudyToBuy, m.INVIS_POTION_NAME, cloudyToBuy * (m.INVIS_POTION_COST or 11)) or "",
+        totalCost))
+    local plat = tonumber(mq.TLO.Me.Platinum() or 0) or 0
+    if plat < totalCost then
+        warn(string.format("Mirao: not enough plat (%dpp available, ~%dpp needed) - skipping purchase.", plat, totalCost))
+        return
+    end
+    -- Nav and open merchant
+    navLoc(PP.LOC.MIRAO, 1000)
+    targetOrFail(PP.NPC.MIRAO, "Could not target Mirao Frostpouch", 10000, true)
+    mq.delay(300)
+    mq.cmd('/usetarget')
+    local t0 = mq.gettime()
+    while not mq.TLO.Window("MerchantWnd").Open() do
+        shouldStop()
+        if mq.gettime() - t0 > 10000 then
+            warn("Mirao: MerchantWnd did not open.")
+            return
+        end
+        mq.delay(300)
+    end
+    mq.cmd('/notify MerchantWnd MW_MerchantSubwindows tabselect 1')
+    mq.delay(300)
+    if needVial then
+        buyFromMiraoItem(m.GATE_POTION_NAME, 1, m.GATE_POTION_COST or 1082)
+    end
+    if needCloudy and cloudyToBuy > 0 then
+        buyFromMiraoItem(m.INVIS_POTION_NAME, cloudyToBuy, m.INVIS_POTION_COST or 11)
+    end
+    mq.cmd('/notify MerchantWnd MW_Done_Button leftmouseup')
+    mq.delay(300)
+end
+
 --- Gate AA / philter returns need bind to PoK (202). init.lua: ensure before quest steps; here before journal + Slick acquire.
 local function ensurePokBind()
     if PP.ENSURE_POK_BIND_BEFORE_RUN == false then
@@ -3049,20 +3201,6 @@ local function ensurePokBind()
     else
         warn("PoK bind may not have completed; verify in-game. Continuing quest.")
     end
-end
-
-local function hasGateAA()
-    local ok, id = pcall(function() return mq.TLO.Me.AltAbility("Gate").ID() end)
-    return ok and tonumber(id or 0) > 0
-end
-
-local function hasGateSpell()
-    local name = PP.GATE_SPELL_NAME or "Gate"
-    local ok, has = pcall(function()
-        local s = mq.TLO.Me.Spell(name)
-        return s and s()
-    end)
-    return ok and has
 end
 
 local function gatePotionNamesList()
@@ -3702,6 +3840,7 @@ end
 --- After Run passes journal checks: speed, mount, Zueria snapshot, AutoSize. No invis here - apply invis in prepBeforeTasselLeg / zone helpers.
 local function runPreflightAfterQuestChecks()
     debugLogQuiet("preflight - speed, mount, Zueria Slide check, MQ2AutoSize sizeself 3 + sizemounts 3 (no invis; invis last per leg).")
+    runMiraoPurchaseIfNeeded()
     pppokerEnsureMovementBuff()
     mountIfNeeded()
     if PP.pppokerZueria and PP.pppokerZueria.refreshReadiness then
@@ -3777,6 +3916,8 @@ local function travelNeriakForeignFromPokHub()
         ensureSpeedAndInvisInNeriak("Neriak Foreign (already in zone)")
         return
     end
+    -- Buy gate/invis potions from Mirao while in PoK before continuing.
+    runMiraoPurchaseIfNeeded()
     -- Nav to safe waypoint first when in PoK - anniversary tent geometry not in navmesh blocks the direct path to the Neriak stone.
     if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID and PP.LOC.POK_NEK_WAYPOINT then
         debugLogQuiet("PoK - nav to waypoint before Neriak stone (anniversary tent bypass).")
@@ -4175,18 +4316,15 @@ local function getObjectiveSlotRaw(task, idx)
     return obj
 end
 
---- Cached task slot - reset at run start; avoids rescanning up to 30 tasks per objective check.
-local paintingsTaskSlot = nil
---- Guard: prevents runBuffUpkeepTick re-entry while buffs are being re-applied (nav pause + cast can take several seconds).
-local buffsApplyingNow = false
+--- gui.paintingsTaskSlot and gui.buffsApplyingNow moved to gui table to stay under LuaJIT 200-local limit.
 
 --- Numeric journal slot 1..N for Paintings (for ${Task[i].Objective[j].*} when named key parse is empty).
 local function getPaintingsTaskSlotNumber()
-    if paintingsTaskSlot then return paintingsTaskSlot end
+    if gui.paintingsTaskSlot then return gui.paintingsTaskSlot end
     for i = 1, PP.MAX_OBJECTIVES do
         local ti = mq.TLO.Task(i)
         if taskEvalExists(ti) and taskIsPaintingsPlayingPoker(ti) then
-            paintingsTaskSlot = i
+            gui.paintingsTaskSlot = i
             return i
         end
     end
@@ -4535,9 +4673,9 @@ local function leaveToadstoolTowardHighpass()
         return
     end
     info("Toadstool done - routing toward Highpass Hold.")
-    easyfindNeriakForeignFromCommonsIfNeeded()
 
     -- Gate pipeline: AA → Spell → Stein → Slide (Nek shortcut) → philter → Run
+    -- EasyFind to Foreign Quarter only fires for true runners (after all gate options exhausted below).
     if tryGateToPoK_AAorSpellOnly() then
         finishLegToHighpassHold()
         mq.delay(2000)
@@ -4857,7 +4995,7 @@ end
 --- Main automation: first incomplete objective → runObjectiveStep → waitObjectiveDone (objectiveIsComplete). Same data as getQuestProgress / GUI bar.
 function runQuest()
     gui.journalOpenedOnce = false
-    paintingsTaskSlot = nil  -- reset slot cache; task may have been dropped/re-acquired between runs
+    gui.paintingsTaskSlot = nil  -- reset slot cache; task may have been dropped/re-acquired between runs
     local questRunStartTime = os.time()
     mq.cmd(string.format('/popup Starting: Paintings Playing Poker v%s', PP.VERSION))
     pauseCWTNPlugins()
