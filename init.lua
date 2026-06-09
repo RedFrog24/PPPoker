@@ -4,6 +4,12 @@
 -- Quest: https://everquest.allakhazam.com/db/quest.html?quest=10723
 -- Version controlled by PP.VERSION (single source of truth - drives window title and run popup).
 -- Changelog:
+-- 3.70: Buy toggle button in UI. Right-aligned on the Commemoratives row (directly under Debug toggle). Green/red FA_TOGGLE_ON/OFF, same pattern as Debug. Toggles PP.MIRAO_BUY_ENABLED live; session-only (not persisted - set MIRAO_BUY_ENABLED=true in config for permanent behavior). Tooltip explains Cloudy Potions / melee use case when off; short reminder when on.
+-- 3.69: Mirao pipeline redesign. (1) MIRAO_BUY_ENABLED = false (default off) - opt-in for melee wanting Cloudy Potion restock; casters and classes with native invis always skip. (2) Dropped Vial of Swirling Smoke purchase entirely - only 2 available, no restock, not worth the code. (3) WAR/MNK/BER added to INVIS_CLASS_BUFFS as {} - same nil-bug fix as PAL/SHD in v3.68; all pure melee now fall through correctly to Cloudy Potion item pipeline when buy is enabled. (4) runMiraoPurchaseIfNeeded simplified: one job, one item.
+-- 3.68: Fix PAL (and SHD) never using Cloudy Potions for invis. pppokerApplyInvisClassBuff() had a nil-check early return - classes missing from INVIS_CLASS_BUFFS returned true (success) immediately, skipping the item pipeline entirely. PAL and SHD were not in the table. Fix: add PAL={} and SHD={} matching the CLR={}/BST={} pattern - empty table falls through the spell loop, returns false, and the item pipeline (Cloudy Potion) runs. SHD still uses Cloak of Shadows AA when trained; empty class entry ensures item fallback when AA is on cooldown.
+-- 3.67: Add Throne of Heroes to gate pipeline. tryThroneOfHeroesToPoK(): checks AA trained + ready via Me.AltAbilityReady[id], fires /alt act, waits for Guild Lobby (zone 344), then /travelto poknowledge. Slots between Zueria Slide and potions in GATE_ITEM_LADDER (default now stein→zueria_slide→throne→potions). Available to all classes at level 5; skipped silently if on 72-min cooldown. ZONE.GUILD_LOBBY = 344 added. Inner local inside tryGateItemPhaseToPoK (does not count against 200-local limit). 197/200 module locals.
+-- 3.66: Fix mounted characters (e.g. PAL on Holy Steed) clipping into wall geometry on Highpass Tiger nav. Added LOC.HIGHPASS_TIGER_WAYPOINT = {-417.31, -266.02, -14.09} (open area near Queen, verified in-game). Obj 12 now navs to waypoint first then Tiger - forces nav mesh onto a clean path that avoids the wall. Applies to all classes; BRD unaffected (Bard never mounts).
+-- 3.65: Fix Mirao buying wrong items. /notify settext is invalid on MerchantWnd/QuantityWnd inputs - was silently failing and buying the first merchant item (Antworth) instead of the intended items. Replace search + QuantityWnd /notify sequence with Merchant TLO: Merchant.SelectItem('=name')() to select by exact name, Merchant.SelectedItem() to verify found, Merchant.Buy(qty)() to purchase. Window open switched from /usetarget to /click right target (works on both Live and EMU; /usetarget does not parse on old EMU).
 -- 3.64: Fix 200-local limit. buyFromMiraoItem, characterHasGateAbility, characterHasInvisAbility moved inside runMiraoPurchaseIfNeeded as inner locals - inner function locals don't count against the 200-module-local LuaJIT limit. Freed 3 module locals.
 -- 3.63: Invis config audit (all classes verified in-game and EQResource). (1) BRD INVIS_CLASS_BUFFS: removed "Selo's Song of Travel" - movement song only, was causing false "has invis" detection when Selo's was active. Shauri's Sonorous Clouding is the only BRD invis song. (2) INVIS_GROUP_AA_NAMES: kept "Group Perfected Invisibility" - in-game name confirmed by AL (EQResource listed wrong name "Group Perfect Invisibility"). Added ID 1210 to INVIS_GROUP_AA_IDS. (3) INVIS_SELF_AA_NAMES: removed "Improved Invisibility" and "Invisibility" (spell names not AA names). Cloak of Shadows ID 531 confirmed for NEC/SHD (living invis). Innate Camouflage ID 80 for DRU/RNG.
 -- 3.62: Mirao purchase now checks class capabilities before buying. characterHasGateAbility() skips Vial if character has Gate AA or Gate spell. characterHasInvisAbility() skips Cloudy Potions if character has invis class spell, any trained invis AA, or is ROG (Sneak/Hide). Casters never visit Mirao for items they already have.
@@ -176,7 +182,7 @@ local stopRequested = false
 
 
 local PP = {
-    VERSION = "3.64",
+    VERSION = "3.70",
     QUEST_TITLE = "Paintings Playing Poker",
     --- Journal has 16 objectives for this quest; use for bar ticks and X/Y display (not dynamic scan).
     QUEST_OBJECTIVE_COUNT = 16,
@@ -228,7 +234,7 @@ local PP = {
     --- Straight-to-PoK clicky (Plane of Knowledge gate); ~30 min reuse; not level-gated. Used when `GATE_ITEM_LADDER` contains `"stein"`. Set nil/"" to skip stein step.
     GATE_STEIN_NAME = "Drunkard's Stein",
     --- Ordered steps after Gate AA/spell: each step skipped if unusable (missing, **reuse timer**, level/mode for Slide). Reorder or omit keys to change priority. `"potions"` = `GATE_POTION_NAMES` in list order.
-    GATE_ITEM_LADDER = { "stein", "zueria_slide", "potions" },
+    GATE_ITEM_LADDER = { "stein", "zueria_slide", "throne", "potions" },
     --- Full `tryGateToPoK` item phase: allow Zueria Slide when ladder includes `zueria_slide` and mode permits (tiger/lion/gate_full). Set false to never Slide in monolithic Gate (stein + philters only).
     GATE_ITEM_PHASE_ZUERIA_SLIDE = true,
     --- Gate clickies (any match enables potion path). First **ready** item is used in order. Lore - carry one. Vial: PoK Mirao Frostpuch ~1049pp; Philter: higher-level option.
@@ -320,9 +326,17 @@ local PP = {
     MOVEMENT_ITEM_NAMES = {
         "Worn Totem",
     },
-    --- Per-class spell/song **gem** invis (Live names - verify in your spellbook; script skips unknown IDs). BRD: songs (not Veil of Midnight - that name does not exist). PAL: no standard gem invis - use `INVIS_ITEM_NAMES` (e.g. Cloudy Potion).
+    --- Per-class spell/song **gem** invis (Live names - verify in your spellbook; script skips unknown IDs). BRD: songs (not Veil of Midnight - that name does not exist). Pure melee (WAR/MNK/BER/PAL/SHD/CLR) use empty {} - no gem invis, falls through to Cloudy Potion item fallback. nil (missing) would trigger early return true in pppokerApplyInvisClassBuff, skipping items entirely.
     INVIS_CLASS_BUFFS = {
         CLR = {},
+        --- WAR/MNK/BER: no invis ability - rely on Cloudy Potions when MIRAO_BUY_ENABLED.
+        WAR = {},
+        MNK = {},
+        BER = {},
+        --- PAL has no gem invis (IVU intentionally excluded - does not work on living guards).
+        PAL = {},
+        --- SHD uses Cloak of Shadows AA (INVIS_SELF_AA_NAMES). Empty here so Cloudy Potion fallback works when AA is on cooldown.
+        SHD = {},
         --- BST has no gem invis spells - invis via Natural Invisibility AA line only (IDs 980/8301). See INVIS_SELF_AA_NAMES.
         BST = {},
         --- Shauri's Sonorous Clouding is the BRD group invis song. Selo's Song of Travel is movement only - it is in MOVEMENT_CLASS_BUFFS, NOT here.
@@ -468,6 +482,8 @@ local PP = {
         NQ = 2,
         SQ = 1,
         POK = 202,
+        --- Guild Lobby (Throne of Heroes destination). Functionally equivalent to PoK for travel.
+        GUILD_LOBBY = 344,
     },
 
     NPC = {
@@ -479,14 +495,13 @@ local PP = {
         MIRAO = { "Mirao Frostpouch" },
     },
 
-    --- Mirao Frostpouch vendor (PoK) - buys gate/invis potions when in PoK.
+    --- Set true to buy Cloudy Potions from Mirao Frostpouch (PoK) when below MIRAO.INVIS_POTION_MIN.
+    --- Checked each time the character arrives in PoK. Useful for melee with no native invis.
+    --- Casters and classes with invis AA/spells are skipped automatically regardless of this setting.
+    MIRAO_BUY_ENABLED = false,
+    --- Mirao Frostpouch vendor (PoK) - Cloudy Potion restock config.
     MIRAO = {
-        --- Buy Vial of Swirling Smoke (gate potion, LORE) when not in bags. ~1082pp.
-        BUY_GATE_POTION = true,
-        GATE_POTION_NAME = "Vial of Swirling Smoke",
-        GATE_POTION_COST = 1082,
-        --- Buy Cloudy Potions (invis, stackable) up to this count. ~11pp each.
-        BUY_INVIS_POTION = true,
+        --- Buy Cloudy Potions (invis, stackable) up to this count. ~11pp each. Mirao has unlimited stock.
         INVIS_POTION_NAME = "Cloudy Potion",
         INVIS_POTION_MIN = 10,
         INVIS_POTION_COST = 11,
@@ -512,6 +527,8 @@ local PP = {
         LUMBER_1 = { -442, -215, -12 },
         LUMBER_2 = { -426, -263, -12 },
         LUMBER_3 = { -408, -267, -12 },
+        --- Waypoint before Tiger nav (obj 12): open area near Queen, clears wall geometry that mounted characters clip into on direct Tiger nav. EQ /loc: -417.31, -266.02, -14.09.
+        HIGHPASS_TIGER_WAYPOINT = { -417.31, -266.02, -14.09 },
         --- Tiger painting (obj 12): locyxz; face east (`TIGER_FACE_HEADING` 128) after nav for journal update.
         TIGER = { -126.49, 570.88, -14.46 },
         --- Safe gate spot outside Tiger room - no NPC clusters; used when Me.Level < HIGHPASS_SAFE_GATE_LEVEL. EQ /loc: -78.13, 625.50, -18.68.
@@ -1383,6 +1400,50 @@ local function drawCommemorativeCoinsRow()
     else
         imgui.Text(string.format("Commemoratives: %d", cnt))
     end
+    -- Buy toggle: right-aligned on same row, directly under Debug toggle
+    local onCol = getImVec4(0.0, 1.0, 0.0, 1.0)
+    local offCol = getImVec4(1.0, 0.0, 0.0, 1.0)
+    local buyBlockW = 70
+    pcall(function()
+        imgui.SameLine()
+        local availX = select(1, getContentRegionAvail2()) or 0
+        if imgui.GetCursorPosX and imgui.SetCursorPosX then
+            imgui.SetCursorPosX(imgui.GetCursorPosX() + math.max(0, availX - buyBlockW))
+        end
+    end)
+    pcall(function() imgui.PushID("PPPokerBuyToggle") end)
+    imgui.Text("Buy")
+    imgui.SameLine()
+    if PP.MIRAO_BUY_ENABLED then
+        pcall(function()
+            if Icons and Icons.FA_TOGGLE_ON then
+                imgui.TextColored(onCol, Icons.FA_TOGGLE_ON)
+            else
+                imgui.TextColored(onCol, "ON")
+            end
+        end)
+    else
+        pcall(function()
+            if Icons and Icons.FA_TOGGLE_OFF then
+                imgui.TextColored(offCol, Icons.FA_TOGGLE_OFF)
+            else
+                imgui.TextColored(offCol, "OFF")
+            end
+        end)
+    end
+    pcall(function()
+        if imgui.IsItemHovered and imgui.SetTooltip and imgui.IsMouseClicked then
+            if imgui.IsItemHovered() then
+                imgui.SetTooltip(PP.MIRAO_BUY_ENABLED
+                    and "Buy ON - replenishing Cloudy Potions from Mirao each PoK visit (click to turn off)"
+                    or "Buy OFF (click to turn on)\nBuys Cloudy Potions from Mirao Frostpouch in PoK.\nFor melee with no native invis. Casters and classes\nwith invis spells/AAs are skipped automatically.")
+                if imgui.IsMouseClicked(0) then
+                    PP.MIRAO_BUY_ENABLED = not PP.MIRAO_BUY_ENABLED
+                end
+            end
+        end
+    end)
+    pcall(function() imgui.PopID() end)
 end
 
 --- MQ often needs Objective TLO "primed" with obj() before Done/Status match /lua parse.
@@ -3064,34 +3125,22 @@ end
 -- Mirao Purchase Pipeline
 
 local function runMiraoPurchaseIfNeeded()
+    if not PP.MIRAO_BUY_ENABLED then return end
     if mq.TLO.Zone.ID() ~= PP.GATE_ZONE_ID then return end
     local m = PP.MIRAO
     if not m then return end
     -- Inner helpers - defined here so they don't consume module-level locals
     local function buyFromMiraoItem(itemName, qty, costEach)
-        mq.cmd('/notify MerchantWnd MW_ItemNameInput leftmouseup')
-        mq.delay(100)
-        mq.cmdf('/notify MerchantWnd MW_ItemNameInput settext "%s"', itemName)
-        mq.delay(100)
-        mq.cmd('/notify MerchantWnd MW_SearchItem_Button leftmouseup')
-        mq.delay(800)
-        mq.cmd('/notify MerchantWnd MW_ItemList listselect 1')
-        mq.delay(200)
-        mq.cmd('/notify MerchantWnd MW_Buy_Button leftmouseup')
-        mq.delay(400)
-        if not mq.TLO.Window("QuantityWnd").Open() then
-            warn(string.format("Mirao: QuantityWnd did not open buying %s.", itemName))
+        mq.TLO.Merchant.SelectItem('=' .. itemName)()
+        mq.delay(500)
+        if not mq.TLO.Merchant.SelectedItem() then
+            warn(string.format("Mirao: '%s' not found on merchant.", itemName))
             return false
         end
-        mq.cmdf('/notify QuantityWnd QTYW_SliderInput settext "%d"', qty)
-        mq.delay(100)
-        mq.cmd('/notify QuantityWnd QTYW_Accept_Button leftmouseup')
+        mq.TLO.Merchant.Buy(qty)()
         mq.delay(500)
         info(string.format("Mirao: bought %dx %s (~%dpp).", qty, itemName, qty * costEach))
         return true
-    end
-    local function characterHasGateAbility()
-        return hasGateAA() or hasGateSpell()
     end
     local function characterHasInvisAbility()
         local class = (mq.TLO.Me.Class.ShortName() or ""):upper()
@@ -3109,35 +3158,24 @@ local function runMiraoPurchaseIfNeeded()
         end
         return false
     end
-    -- Only buy what the character can't do themselves
-    local needVial = m.BUY_GATE_POTION
-        and not characterHasGateAbility()
-        and not mq.TLO.FindItem(m.GATE_POTION_NAME)()
+    if characterHasInvisAbility() then return end
     local currentCloudy = tonumber(mq.TLO.FindItem(m.INVIS_POTION_NAME).Stack() or 0) or 0
-    local needCloudy = m.BUY_INVIS_POTION
-        and not characterHasInvisAbility()
-        and currentCloudy < (m.INVIS_POTION_MIN or 10)
-    local cloudyToBuy = needCloudy and math.max(0, (m.INVIS_POTION_MIN or 10) - currentCloudy) or 0
-    if not needVial and not needCloudy then return end
-    -- Cost warning
-    local totalCost = (needVial and (m.GATE_POTION_COST or 1082) or 0)
-        + (cloudyToBuy * (m.INVIS_POTION_COST or 11))
-    info(string.format("Mirao: buying%s%s - ~%dpp total.",
-        needVial and string.format(" 1x %s (~%dpp)", m.GATE_POTION_NAME, m.GATE_POTION_COST or 1082) or "",
-        needCloudy and string.format(" %dx %s (~%dpp)", cloudyToBuy, m.INVIS_POTION_NAME, cloudyToBuy * (m.INVIS_POTION_COST or 11)) or "",
-        totalCost))
+    local cloudyToBuy = math.max(0, (m.INVIS_POTION_MIN or 10) - currentCloudy)
+    if cloudyToBuy == 0 then return end
+    local totalCost = cloudyToBuy * (m.INVIS_POTION_COST or 11)
     local plat = tonumber(mq.TLO.Me.Platinum() or 0) or 0
     if plat < totalCost then
-        warn(string.format("Mirao: not enough plat (%dpp available, ~%dpp needed) - skipping purchase.", plat, totalCost))
+        warn(string.format("Mirao: not enough plat (%dpp available, ~%dpp needed) - skipping.", plat, totalCost))
         return
     end
+    info(string.format("Mirao: replenishing %dx %s (~%dpp).", cloudyToBuy, m.INVIS_POTION_NAME, totalCost))
     -- Nav and open merchant
     navLoc(PP.LOC.MIRAO, 1000)
     targetOrFail(PP.NPC.MIRAO, "Could not target Mirao Frostpouch", 10000, true)
     mq.delay(300)
-    mq.cmd('/usetarget')
+    mq.cmd('/click right target')
     local t0 = mq.gettime()
-    while not mq.TLO.Window("MerchantWnd").Open() do
+    while not mq.TLO.Merchant.Open() do
         shouldStop()
         if mq.gettime() - t0 > 10000 then
             warn("Mirao: MerchantWnd did not open.")
@@ -3147,12 +3185,7 @@ local function runMiraoPurchaseIfNeeded()
     end
     mq.cmd('/notify MerchantWnd MW_MerchantSubwindows tabselect 1')
     mq.delay(300)
-    if needVial then
-        buyFromMiraoItem(m.GATE_POTION_NAME, 1, m.GATE_POTION_COST or 1082)
-    end
-    if needCloudy and cloudyToBuy > 0 then
-        buyFromMiraoItem(m.INVIS_POTION_NAME, cloudyToBuy, m.INVIS_POTION_COST or 11)
-    end
+    buyFromMiraoItem(m.INVIS_POTION_NAME, cloudyToBuy, m.INVIS_POTION_COST or 11)
     mq.cmd('/notify MerchantWnd MW_Done_Button leftmouseup')
     mq.delay(300)
 end
@@ -3611,10 +3644,40 @@ local function gateItemPhaseZueriaSlideEnabled(zueriaMode)
     return false
 end
 
---- Item phase: `PP.GATE_ITEM_LADDER` order (default stein → zueria_slide → potions). Skip step if unusable; stein/philter skip reuse without blocking Slide.
+--- Item phase: `PP.GATE_ITEM_LADDER` order (default stein → zueria_slide → throne → potions). Skip step if unusable; stein/philter skip reuse without blocking Slide.
 tryGateItemPhaseToPoK = function(zueriaMode)
+    -- Inner local - does not count against 200-module-local LuaJIT limit.
+    -- Throne of Heroes AA: teleports to Guild Lobby (344), then /travelto poknowledge.
+    local function tryThroneOfHeroesToPoK()
+        local aa = mq.TLO.Me.AltAbility("Throne of Heroes")
+        if not aa then return false end
+        local id = tonumber(aa.ID() or 0) or 0
+        if id == 0 then return false end
+        if not mq.TLO.Me.AltAbilityReady[id]() then
+            debugLogQuiet("Throne of Heroes on cooldown - skipping.")
+            return false
+        end
+        dismountIfMounted("Throne of Heroes")
+        info("Throne of Heroes to Guild Lobby.")
+        mq.cmdf('/alt act %d', id)
+        local t0 = mq.gettime()
+        while mq.TLO.Zone.ID() ~= PP.ZONE.GUILD_LOBBY and mq.TLO.Zone.ID() ~= PP.GATE_ZONE_ID do
+            shouldStop()
+            if mq.gettime() - t0 > 30000 then
+                warn("Throne of Heroes: did not zone to Guild Lobby in 30s.")
+                return false
+            end
+            mq.delay(300)
+        end
+        if mq.TLO.Zone.ID() == PP.ZONE.GUILD_LOBBY then
+            info("Throne of Heroes: in Guild Lobby - traveling to PoK.")
+            mq.cmd('/travelto poknowledge')
+            waitForZoneOrFalse(PP.GATE_ZONE_ID, 60000)
+        end
+        return mq.TLO.Zone.ID() == PP.GATE_ZONE_ID
+    end
     zueriaMode = zueriaMode or "none"
-    local ladder = PP.GATE_ITEM_LADDER or { "stein", "zueria_slide", "potions" }
+    local ladder = PP.GATE_ITEM_LADDER or { "stein", "zueria_slide", "throne", "potions" }
     local slideEnabled = gateItemPhaseZueriaSlideEnabled(zueriaMode)
     for _, step in ipairs(ladder) do
         if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID then
@@ -3639,6 +3702,10 @@ tryGateItemPhaseToPoK = function(zueriaMode)
                     end
                     return tryGateToPoKAfterZueriaSlideOrTravel()
                 end
+            end
+        elseif s == "throne" or s == "throne_of_heroes" then
+            if tryThroneOfHeroesToPoK() then
+                return true
             end
         elseif s == "potions" or s == "gate_potions" or s == "philters" or s == "potion" then
             if tryGatePotionsClickiesToPoK() then
@@ -3916,7 +3983,7 @@ local function travelNeriakForeignFromPokHub()
         ensureSpeedAndInvisInNeriak("Neriak Foreign (already in zone)")
         return
     end
-    -- Buy gate/invis potions from Mirao while in PoK before continuing.
+    -- Replenish Cloudy Potions from Mirao while in PoK (if MIRAO_BUY_ENABLED).
     runMiraoPurchaseIfNeeded()
     -- Nav to safe waypoint first when in PoK - anniversary tent geometry not in navmesh blocks the direct path to the Neriak stone.
     if mq.TLO.Zone.ID() == PP.GATE_ZONE_ID and PP.LOC.POK_NEK_WAYPOINT then
@@ -4867,6 +4934,7 @@ local function runObjectiveStep(idx, task)
         ensureZone(PP.ZONE.HIGHPASS, "highpasshold", "Highpass Hold")
         mq.delay(tonumber(PP.HIGHPASS_ENTRY_DELAY_MS) or 350)
         ensureSpeedInvisInHighpass("objective 12 (Highpass - tiger)")
+        navLocNoMount(PP.LOC.HIGHPASS_TIGER_WAYPOINT, 500)
         navLocNoMount(PP.LOC.TIGER, tonumber(PP.TIGER_NAV_SETTLE_MS) or 1200)
         local maxD = tonumber(PP.TIGER_NAV_RETRY_IF_DIST_GT) or 22
         if distanceMeToLocYXZ(PP.LOC.TIGER) > maxD then
